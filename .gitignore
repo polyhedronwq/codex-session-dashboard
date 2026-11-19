@@ -1,0 +1,25 @@
+﻿# 构建产物
+dist/
+dist-package/
+share/
+
+# 运行期文件
+*.log
+health.json
+quota-cache.json
+
+# 本机安装（不属于仓库）
+backup-*/
+.backup-*/
+__pycache__/
+*.pyc
+
+# 开发期快照与探针产物
+probe/*.html
+probe/panel-harness*.html
+probe/baseline/
+verify/baseline/
+verify/shots/
+
+# 开发期探针脚本（含本机路径，不随仓库发布）
+probe/

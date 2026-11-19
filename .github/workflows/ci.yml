@@ -1,0 +1,65 @@
+name: CI
+
+on:
+  push:
+  pull_request:
+  workflow_dispatch:
+
+jobs:
+  windows:
+    runs-on: windows-latest
+    strategy:
+      fail-fast: false
+      matrix:
+        python-version: ['3.10', '3.12']
+
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Set up Python
+        uses: actions/setup-python@v5
+        with:
+          python-version: ${{ matrix.python-version }}
+
+      - name: Set up Node
+        uses: actions/setup-node@v4
+        with:
+          node-version: '22'
+
+      - name: 构建产物（不渲染本机路径）
+        shell: powershell
+        run: ./build.ps1 -NoMirror
+
+      - name: 检查 dist 里不含本机路径（源码必须可移植）
+        shell: powershell
+        run: |
+          $bad = Select-String -Path dist\**\*.js, dist\**\*.vbs, dist\**\*.json -Pattern 'C:\\\\Users' -ErrorAction SilentlyContinue
+          if ($bad) { $bad | ForEach-Object { Write-Host $_.Path }; throw 'dist 中含本机绝对路径' }
+
+      - name: 解析层单元测试
+        shell: powershell
+        run: python verify\test_server.py
+
+      - name: JavaScript 语法
+        shell: powershell
+        run: |
+          foreach ($f in @('dist\bar\injected.js', 'dist\bar\injector.js', 'verify\bar-states.js', 'verify\panel-render.js', 'verify\snapshot.js')) {
+            node --check $f
+            if ($LASTEXITCODE -ne 0) { throw "syntax error: $f" }
+          }
+
+      - name: PowerShell 语法与 UTF-8 BOM
+        shell: powershell
+        run: |
+          $files = @(Get-ChildItem -Recurse -Filter *.ps1 | Where-Object { $_.FullName -notmatch '\\node_modules\\' })
+          $bad = @()
+          foreach ($f in $files) {
+            $bytes = [System.IO.File]::ReadAllBytes($f.FullName)
+            $hasBom = $bytes.Length -ge 3 -and $bytes[0] -eq 0xEF -and $bytes[1] -eq 0xBB -and $bytes[2] -eq 0xBF
+            $nonAscii = @($bytes | Where-Object { $_ -gt 0x7F }).Count -gt 0
+            $errs = $null
+            [System.Management.Automation.Language.Parser]::ParseFile($f.FullName, [ref]$null, [ref]$errs) | Out-Null
+            if ($errs.Count -gt 0) { $bad += "$($f.Name): 语法错误" }
+            elseif ($nonAscii -and -not $hasBom) { $bad += "$($f.Name): 含中文但缺 BOM" }
+          }
+          if ($bad.Count -gt 0) { $bad | ForEach-Object { Write-Host $_ }; throw 'PowerShell 检查未通过' }

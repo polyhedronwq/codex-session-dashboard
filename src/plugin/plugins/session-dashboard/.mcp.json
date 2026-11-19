@@ -1,0 +1,10 @@
+{
+  "mcpServers": {
+    "session-dashboard": {
+      "command": "{{python}}",
+      "args": [
+        "{{server}}"
+      ]
+    }
+  }
+}

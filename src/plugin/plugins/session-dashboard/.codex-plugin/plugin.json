@@ -1,0 +1,10 @@
+{
+  "name": "session-dashboard",
+  "version": "0.1.0",
+  "description": "Read-only session dashboard: turns, steps, tokens, cache hit rate, context usage and per-turn timings",
+  "mcpServers": "./.mcp.json",
+  "interface": {
+    "displayName": "会话仪表盘",
+    "shortDescription": "当前会话的轮次、token、缓存与耗时统计"
+  }
+}

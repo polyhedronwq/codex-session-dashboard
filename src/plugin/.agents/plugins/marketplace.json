@@ -1,0 +1,20 @@
+{
+  "name": "codex-dashboard-local",
+  "interface": {
+    "displayName": "Codex 会话仪表盘（本地）"
+  },
+  "plugins": [
+    {
+      "name": "session-dashboard",
+      "source": {
+        "source": "local",
+        "path": "./plugins/session-dashboard"
+      },
+      "policy": {
+        "installation": "AVAILABLE",
+        "authentication": "ON_INSTALL"
+      },
+      "category": "Productivity"
+    }
+  ]
+}

@@ -1,0 +1,1232 @@
+<!doctype html>
+<html lang="zh-CN">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>会话仪表盘</title>
+<style>
+  :root {
+    --bg: #181818; --panel: #202020; --panel2: #262626; --line: #2f2f2f;
+    --text: #ececec; --muted: #9aa0a6; --faint: #6f757c;
+    --ok: #53b559; --warn: #d8a13b; --bad: #e05252;
+    --model: #5b8def; --tool: #d8a13b;
+    color-scheme: dark;
+  }
+  body[data-theme="light"] {
+    --bg: #ffffff; --panel: #f6f7f8; --panel2: #ffffff; --line: #e6e7ea;
+    --text: #1b1d21; --muted: #6f757c; --faint: #9096a0;
+    --ok: #2f9e4f; --warn: #b07815; --bad: #c53939;
+    --model: #3a83f7; --tool: #c98a1a;
+    color-scheme: light;
+  }
+  * { box-sizing: border-box; }
+  html, body { margin: 0; height: 100%; }
+  body {
+    background: var(--bg); color: var(--text);
+    font: 13px/1.5 "Segoe UI Variable Text", "Segoe UI", "Microsoft YaHei UI", system-ui, sans-serif;
+    -webkit-font-smoothing: antialiased;
+  }
+  .wrap { max-width: 1280px; margin: 0 auto; padding: 20px 24px 40px; }
+  header { display: flex; align-items: center; gap: 10px; flex-wrap: wrap; }
+  h1 { font-size: 16px; margin: 0; font-weight: 600; }
+  .sub { color: var(--muted); font-size: 12px; }
+  .chip { border: 1px solid var(--line); border-radius: 999px; padding: 2px 9px; font-size: 11.5px; color: var(--muted); }
+  .grow { flex: 1 1 auto; }
+  button {
+    font: inherit; color: var(--muted); background: transparent; border: 1px solid var(--line);
+    border-radius: 8px; padding: 5px 11px; cursor: pointer;
+  }
+  button:hover { color: var(--text); border-color: var(--faint); }
+  .tabs { display: flex; gap: 4px; margin: 16px 0 14px; border-bottom: 1px solid var(--line); }
+  .tab {
+    border: 0; border-bottom: 2px solid transparent; border-radius: 0; padding: 7px 12px;
+    color: var(--muted); background: transparent;
+  }
+  .tab.on { color: var(--text); border-bottom-color: var(--text); }
+  .cards { display: grid; grid-template-columns: repeat(6, minmax(0, 1fr)); gap: 10px; }
+  .card { border: 1px solid var(--line); background: var(--panel); border-radius: 10px; padding: 11px 12px; }
+  .card .lab { color: var(--muted); font-size: 11.5px; white-space: nowrap; }
+  .card .num { font-size: 20px; font-weight: 600; margin-top: 4px; font-variant-numeric: tabular-nums; letter-spacing: -.3px; }
+  .card .num small { font-size: 11px; color: var(--muted); font-weight: 400; letter-spacing: 0; }
+  .card .cap { color: var(--faint); font-size: 11px; margin-top: 2px; white-space: nowrap; }
+
+  .section { margin-top: 18px; }
+  .section h2 { font-size: 12.5px; font-weight: 600; margin: 0 0 8px; color: var(--text); }
+  .box { border: 1px solid var(--line); border-radius: 10px; padding: 12px 13px; background: var(--panel); }
+  .kv { display: grid; grid-template-columns: 1fr auto; gap: 6px 14px; font-size: 12.5px; }
+  .kv dt { color: var(--muted); }
+  .kv dd { margin: 0; text-align: right; font-variant-numeric: tabular-nums; }
+
+  table { width: 100%; border-collapse: collapse; font-variant-numeric: tabular-nums; }
+  th, td { padding: 7px 8px; text-align: right; white-space: nowrap; }
+  th { color: var(--muted); font-weight: 500; font-size: 11.5px; border-bottom: 1px solid var(--line); }
+  td { border-bottom: 1px solid var(--line); font-size: 12px; }
+  th:first-child, td:first-child { text-align: left; }
+  tbody tr:hover td { background: var(--panel); }
+  .mut { color: var(--muted); }
+  .faint { color: var(--faint); }
+  .dlg { max-width: 420px; }
+  /* This column exists to identify a turn, not to be read: one line, full text on hover. */
+  .dlg .q, .dlg .a { overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+  .dlg .q { color: var(--text); }
+  .dlg .a { color: var(--muted); font-size: 11.5px; }
+  .dlg .chips { color: var(--faint); font-size: 11px; margin-top: 2px; }
+  .turncell .cap { color: var(--faint); font-size: 11px; }
+  td.dlgcell { text-align: left; }
+  .gantt { width: 190px; min-width: 120px; }
+  .bar { display: flex; height: 7px; border-radius: 99px; overflow: hidden; background: var(--line); }
+  .bar i { display: block; height: 100%; }
+  .bar .m { background: var(--model); }
+  .bar .t { background: var(--tool); }
+  .clickable { cursor: pointer; }
+  .caret { display: inline-block; width: 12px; color: var(--faint); }
+  tr.detail td { background: var(--panel); border-bottom: 1px solid var(--line); }
+  .steps { display: flex; flex-direction: column; gap: 2px; padding: 4px 0 8px; }
+  .step { display: grid; grid-template-columns: 22px 64px 1fr auto; gap: 10px; align-items: baseline; font-size: 12px; padding: 2px 4px; }
+  .step .n { color: var(--faint); text-align: right; }
+  .step .tag { color: var(--muted); }
+  .step .nm { color: var(--text); overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+  .step .d { color: var(--muted); }
+  .empty { color: var(--muted); padding: 24px; text-align: center; border: 1px dashed var(--line); border-radius: 10px; }
+  .legend { display: flex; gap: 14px; font-size: 11.5px; color: var(--muted); margin-top: 8px; }
+  .detail { display: grid; grid-template-columns: minmax(0, 1fr) minmax(0, 1fr); gap: 10px; align-items: start; }
+  @media (max-width: 900px) { .detail { grid-template-columns: minmax(0, 1fr); } }
+  .legend i { width: 8px; height: 8px; border-radius: 2px; display: inline-block; margin-right: 5px; }
+  .note { color: var(--faint); font-size: 11px; margin-top: 12px; }
+  .hide { display: none !important; }
+  .controls { display: flex; gap: 14px; align-items: center; flex-wrap: wrap; margin: 10px 0 6px; font-size: 12px; color: var(--muted); }
+  .controls label { display: inline-flex; gap: 6px; align-items: center; cursor: pointer; user-select: none; }
+  .controls input[type=checkbox] { accent-color: #8b8f96; }
+  .switch { display: inline-flex; border: 1px solid var(--line); border-radius: 8px; overflow: hidden; }
+  .switch button { border: 0; border-radius: 0; padding: 3px 10px; font-size: 11.5px; }
+  .switch button.on { background: var(--panel); color: var(--text); }
+  .toolbar { display: flex; align-items: center; gap: 10px; margin: 2px 0 10px; }
+  .search {
+    background: var(--panel); border: 1px solid var(--line); color: var(--text);
+    border-radius: 8px; padding: 6px 10px; font: inherit; font-size: 12px; width: 320px;
+  }
+  .search::placeholder { color: var(--faint); }
+  .trow {
+    display: grid; grid-template-columns: 240px 1fr 74px; gap: 14px; align-items: center;
+    padding: 8px 14px; border-bottom: 1px solid var(--line); cursor: pointer;
+  }
+  .trow:hover { background: var(--panel); }
+  .trow .tq { color: var(--muted); font-size: 11.5px; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+  .trow .tlabel { font-size: 12px; }
+  .trow .tlabel .cap { color: var(--faint); font-size: 11px; margin-left: 6px; }
+  .ttrack { position: relative; height: 14px; }
+  .tbar {
+    position: absolute; inset: 3px 0; border-radius: 4px; overflow: hidden;
+    background: color-mix(in srgb, var(--model) 32%, transparent);
+  }
+  .seg { position: absolute; top: 0; bottom: 0; background: var(--tool); border-radius: 2px; opacity: .9; }
+  .tdur { text-align: right; color: var(--muted); font-size: 11.5px; font-variant-numeric: tabular-nums; }
+  .tdetail { background: var(--panel); border-bottom: 1px solid var(--line); padding: 4px 14px 8px 254px; }
+  .rec {
+    display: grid; grid-template-columns: 84px 56px 1fr 84px; gap: 12px;
+    padding: 3px 6px; border-radius: 6px; cursor: pointer; font-size: 12px;
+  }
+  .rec:hover, .rec.on { background: var(--panel); }
+  .rec .rt { color: var(--faint); font-variant-numeric: tabular-nums; }
+  .rec .rl { color: var(--muted); }
+  .rec .rn { overflow: hidden; white-space: nowrap; text-overflow: ellipsis; }
+  .rec .rd { text-align: right; color: var(--muted); font-variant-numeric: tabular-nums; }
+  .rec.empty-rec { color: var(--faint); cursor: default; }
+  .rec.group .rl { color: var(--text); }
+  .rec.group .rn { color: var(--muted); }
+  .foldbox { display: inline-flex; gap: 6px; align-items: center; font-size: 12px; color: var(--muted); cursor: pointer; }
+  .tok-s { color: #8fd18f; }
+  .tok-c { color: var(--faint); font-style: italic; }
+  .tok-k { color: #7fb3ef; }
+  .tok-n { color: #e0b060; }
+  .insp { margin: 2px 0 8px 84px; border-left: 2px solid var(--line); padding: 4px 0 4px 12px; }
+  .insp .ib { margin: 4px 0; }
+  .insp .il { color: var(--faint); font-size: 11px; }
+  .insp pre {
+    margin: 3px 0 0; white-space: pre-wrap; word-break: break-word;
+    font: 11.5px/1.5 "Cascadia Code", Consolas, monospace; color: var(--text);
+    background: var(--panel); border: 1px solid var(--line); border-radius: 8px; padding: 7px 9px;
+    max-height: 260px; overflow: auto;
+  }
+  .totalrow td { font-weight: 600; border-top: 1px solid var(--line); border-bottom: 0; }
+  #stats table { min-width: 1280px; }
+  .arow {
+    display: grid; grid-template-columns: 104px 190px 138px 1fr 78px; column-gap: 12px;
+    align-items: center; padding: 7px 14px; border-bottom: 1px solid var(--line); font-size: 12px;
+  }
+  .arow:last-child { border-bottom: 0; }
+  .arow:hover { background: var(--panel2); }
+  .arow .aname { color: var(--text); overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+  .arow .apath {
+    color: var(--faint); font: 11.5px/1.5 "Cascadia Code", Consolas, monospace;
+    overflow: hidden; text-overflow: ellipsis; white-space: nowrap;
+  }
+  .arow .amodel { color: var(--muted); }
+  .arow .amodel em { color: var(--faint); font-style: normal; font-size: 11px; }
+  .arow .abar { height: 6px; border-radius: 99px; background: var(--line); overflow: hidden; }
+  .arow .abar i { display: block; height: 100%; border-radius: 99px; background: var(--model); }
+  .arow .atokens { text-align: right; font-variant-numeric: tabular-nums; }
+  .arow .aextra { color: var(--faint); font-size: 11px; }
+  .frow { display: flex; gap: 10px; align-items: baseline; padding: 3px 0; font-size: 12px; }
+  .frow .fname { flex: 0 1 auto; min-width: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+  .frow .fcount { margin-left: auto; color: var(--muted); font-variant-numeric: tabular-nums; }
+  a.dsh-link {
+    color: var(--model); text-decoration: none; cursor: pointer;
+    border-bottom: 1px solid color-mix(in srgb, var(--model) 45%, transparent);
+    overflow-wrap: anywhere;
+  }
+  a.dsh-link:hover { color: var(--text); border-bottom-color: var(--text); }
+  .envroots { display: flex; flex-wrap: wrap; gap: 6px; margin-top: 10px; }
+  .envroots .rp {
+    border: 1px solid var(--line); border-radius: 6px; padding: 2px 8px;
+    font: 11.5px/1.7 "Cascadia Code", Consolas, monospace; color: var(--muted);
+  }
+  .crow {
+    display: grid; grid-template-columns: 66px 96px 1fr; column-gap: 12px; align-items: baseline;
+    padding: 5px 0; font-size: 12px; border-bottom: 1px solid var(--line);
+  }
+  .crow:last-child { border-bottom: 0; }
+  .crow .ct { color: var(--faint); font-variant-numeric: tabular-nums; }
+  .crow .cw { color: var(--muted); font-size: 11.5px; }
+  .crow .cd { color: var(--text); }
+  .crow b { color: var(--model); font-weight: 600; }
+  .mmsg {
+    display: grid; grid-template-columns: 160px 1fr 64px; column-gap: 12px; align-items: center;
+    padding: 4px 0; font-size: 12px;
+  }
+  .mmsg .mn {
+    color: var(--muted); font: 11.5px/1.6 "Cascadia Code", Consolas, monospace;
+    overflow: hidden; text-overflow: ellipsis; white-space: nowrap;
+  }
+  .mmsg .mbar { height: 6px; border-radius: 99px; background: var(--line); overflow: hidden; }
+  .mmsg .mbar i { display: block; height: 100%; border-radius: 99px; background: var(--tool); }
+  .mmsg .mc { text-align: right; color: var(--muted); font-variant-numeric: tabular-nums; }
+  .abort {
+    display: inline-block; margin-left: 5px; padding: 0 5px; border-radius: 4px;
+    background: rgba(224, 82, 82, .16); color: var(--bad); font-size: 10.5px; line-height: 16px;
+  }
+  .delta { color: var(--faint); font-size: 11px; }
+  .delta.neg { color: var(--bad); }
+  .sblock { margin: 4px 0 6px; }
+  .shead { color: var(--faint); font-size: 11px; margin: 6px 0 3px; }
+  .srow {
+    display: grid; grid-template-columns: 28px 96px 132px 96px 84px 96px; column-gap: 16px;
+    align-items: baseline; font-size: 12px; padding: 2px 4px;
+  }
+  .srow .num { text-align: right; font-variant-numeric: tabular-nums; }
+  .srow .tm { color: var(--faint); font-variant-numeric: tabular-nums; }
+  .srow.head { color: var(--muted); font-size: 11px; border-bottom: 1px solid var(--line); padding-bottom: 3px; }
+  .itemrow { display: flex; gap: 10px; font-size: 12px; padding: 2px 4px; }
+  .itemrow .tag { width: 56px; flex: 0 0 auto; color: var(--muted); }
+  .itemrow .nm { flex: 1 1 auto; overflow: hidden; white-space: nowrap; text-overflow: ellipsis; }
+  .itemrow .d { color: var(--muted); font-variant-numeric: tabular-nums; }
+  .it summary {
+    display: grid; grid-template-columns: 56px 1fr auto; gap: 10px; align-items: baseline;
+    cursor: pointer; list-style: none; font-size: 12px; padding: 2px 4px;
+  }
+  .it summary::-webkit-details-marker { display: none; }
+  .it summary .nm { overflow: hidden; white-space: nowrap; text-overflow: ellipsis; }
+  .it .itext { color: var(--muted); font-size: 12px; white-space: pre-wrap; padding: 4px 4px 8px 70px; }
+  @media (max-width: 1100px) {
+    .cards { grid-template-columns: repeat(3, minmax(0, 1fr)); }
+  }
+</style>
+</head>
+<body>
+<div class="wrap">
+  <header>
+    <h1>会话仪表盘</h1>
+    <span class="chip" id="model">—</span>
+    <span class="chip" id="thread-title">—</span>
+    <span class="chip" id="auto">自动刷新 4s</span>
+    <span class="grow"></span>
+    <span class="sub" id="updated"></span>
+    <button id="refresh">刷新</button>
+  </header>
+
+  <div class="tabs">
+    <button class="tab on" data-tab="overview">概览</button>
+    <button class="tab" data-tab="stats">统计</button>
+    <button class="tab" data-tab="trace">轨迹</button>
+    <button class="tab" data-tab="agents">代理</button>
+  </div>
+
+  <div id="error" class="empty hide"></div>
+
+  <section id="overview">
+    <div class="cards">
+      <div class="card"><div class="lab">轮次 / 步数</div><div class="num" id="c-turns">—</div><div class="cap" id="c-turns-cap">&nbsp;</div></div>
+      <div class="card"><div class="lab">最近一轮速度</div><div class="num" id="c-speed">—</div><div class="cap" id="c-speed-cap">&nbsp;</div></div>
+      <div class="card"><div class="lab">累计 token</div><div class="num" id="c-total">—</div><div class="cap" id="c-total-cap">&nbsp;</div></div>
+      <div class="card"><div class="lab">缓存命中</div><div class="num" id="c-cache">—</div><div class="cap" id="c-cache-cap">&nbsp;</div></div>
+      <div class="card"><div class="lab">上下文</div><div class="num" id="c-ctx">—</div><div class="cap" id="c-ctx-cap">&nbsp;</div></div>
+      <div class="card"><div class="lab">本会话额度</div><div class="num" id="c-quota">—</div><div class="cap" id="c-quota-cap">&nbsp;</div></div>
+    </div>
+
+    <div class="section">
+      <h2>最近一轮</h2>
+      <div class="box"><dl class="kv" id="last-turn"></dl></div>
+    </div>
+
+    <div class="section">
+      <h2>最近 5 轮</h2>
+      <div class="box" style="padding:4px 2px">
+        <table>
+          <thead><tr><th>轮次</th><th>步</th><th>输入</th><th>输出</th><th>缓存命中</th><th>速度</th><th>总用时</th></tr></thead>
+          <tbody id="recent"></tbody>
+        </table>
+      </div>
+    </div>
+    <div class="note" id="note"></div>
+
+    <div class="section" id="env-section">
+      <h2>运行环境</h2>
+      <div class="box">
+        <dl class="kv" id="env-kv"></dl>
+        <div class="envroots" id="env-roots"></div>
+      </div>
+
+      <div id="env-changes" class="hide" style="margin-top:10px">
+        <h2>变更记录</h2>
+        <div class="box"><div id="env-changes-list"></div></div>
+      </div>
+    </div>
+  </section>
+
+  <section id="stats" class="hide">
+    <div class="sub" id="stats-summary"></div>
+    <div class="controls">
+      <label><input type="checkbox" id="opt-total"> 合计行</label>
+      <label><input type="checkbox" id="opt-events"> 事件行（含压缩）</label>
+      <label><input type="checkbox" id="opt-delta"> 上下文增量</label>
+      <span class="switch" id="opt-ctxmode">
+        <button data-mode="latest" class="on">最新</button><button data-mode="cum">累计</button>
+      </span>
+      <button id="opt-expand">展开全部</button>
+    </div>
+    <div class="box" style="margin-top:8px;padding:4px 2px;overflow-x:auto">
+      <table>
+        <thead>
+          <tr>
+            <th>轮次</th><th>对话</th><th>步</th><th>上下文占用</th><th>输入(tok)</th><th>输出(tok)</th>
+            <th>缓存命中(%)</th><th>首 token</th><th>速度(tok/s)</th><th>模型用时</th><th>工具用时</th><th>总用时</th><th>时间分布</th>
+          </tr>
+        </thead>
+        <tbody id="stats-body"></tbody>
+      </table>
+    </div>
+    <div class="legend">
+      <span><i style="background:var(--model)"></i>模型</span>
+      <span><i style="background:var(--tool)"></i>工具</span>
+      <span class="faint">点一行展开每一步</span>
+    </div>
+    <div class="note">速度 = 输出 token ÷（总用时 − 首 token 延迟）；工具用时按本地步骤记录累计。总用时还包含等待批准、排队与闲置，所以通常大于「模型用时 + 工具用时」。</div>
+  </section>
+
+  <section id="trace" class="hide">
+    <div class="toolbar">
+      <input id="trace-q" class="search" placeholder="搜索对话、命令或工具…">
+      <label class="foldbox"><input type="checkbox" id="opt-fold" checked> 折叠调用</label>
+      <span class="grow"></span>
+      <span class="sub" id="trace-summary"></span>
+    </div>
+    <div class="box" style="padding:6px 0" id="trace-box">
+      <div id="trace-list"></div>
+    </div>
+    <div class="legend">
+      <span><i style="background:var(--model)"></i>模型</span>
+      <span><i style="background:var(--tool)"></i>工具</span>
+      <span class="faint">点一行展开步骤，条上的小段是工具调用</span>
+    </div>
+  </section>
+
+  <section id="agents" class="hide">
+    <div class="sub" id="agents-summary"></div>
+    <div class="box" style="margin-top:8px;padding:4px 0">
+      <div id="agents-list"></div>
+    </div>
+    <div class="legend">
+      <span class="faint">条形长度 = 该子代理的 token 占最大者的比例</span>
+    </div>
+
+    <div class="section">
+      <h2>工作足迹</h2>
+      <div class="detail">
+        <div class="box">
+          <dl class="kv" id="footprint-kv"></dl>
+        </div>
+        <div class="box">
+          <h3 style="margin:0 0 8px;font-size:12.5px">改动最多的文件</h3>
+          <div id="footprint-files"></div>
+        </div>
+      </div>
+    </div>
+
+    <div class="section" id="agent-msgs-section">
+      <h2>代理间消息</h2>
+      <div class="box">
+        <dl class="kv" id="agent-msgs-kv"></dl>
+        <div id="agent-msgs-list" style="margin-top:8px"></div>
+        <div class="note">消息正文由 Codex 加密保存，这里只能看到收发方与次数。</div>
+      </div>
+    </div>
+  </section>
+</div>
+
+<script>
+(() => {
+  const state = {
+    data: null, tab: 'overview', expanded: new Set(), all: false, sig: '', threadId: null,
+    attempted: new Set(), traceOpen: new Set(), query: '',
+    openRec: null, detailTurns: new Set(), detailPending: new Set(), foldedGroups: new Set(),
+    opts: { total: false, events: false, delta: false, ctxMode: 'latest', foldCalls: true },
+  };
+  const REFRESH_MS = 4000;
+  let nextId = 1;
+  const pending = new Map();
+  let initialized = false;
+
+  const $ = (id) => document.getElementById(id);
+  const esc = (s) => String(s ?? '').replace(/[&<>"]/g, (c) => ({ '&': '&amp;', '<': '&lt;', '>': '&gt;', '"': '&quot;' }[c]));
+
+  function fmtNum(n) {
+    if (typeof n !== 'number' || !isFinite(n)) return '—';
+    if (n >= 1e6) return (n / 1e6).toFixed(1).replace(/\.0$/, '') + 'M';
+    if (n >= 1e4) return (n / 1e3).toFixed(1).replace(/\.0$/, '') + 'K';
+    return n.toLocaleString();
+  }
+  function fmtInt(n) { return typeof n === 'number' && isFinite(n) ? n.toLocaleString() : '—'; }
+  function fmtPct(n) { return typeof n === 'number' && isFinite(n) ? n.toFixed(1) + '%' : '—'; }
+  function fmtDur(msValue) {
+    if (typeof msValue !== 'number' || !isFinite(msValue) || msValue <= 0) return '—';
+    if (msValue < 1000) return Math.round(msValue) + 'ms';
+    if (msValue < 60000) return (msValue / 1000).toFixed(1).replace(/\.0$/, '') + 's';
+    const m = Math.floor(msValue / 60000);
+    const s = Math.round((msValue % 60000) / 1000);
+    return m + 'm' + (s ? ' ' + s + 's' : '');
+  }
+  function fmtClock(ts) {
+    if (!ts) return '—';
+    const date = new Date(ts);
+    const pad = (n) => String(n).padStart(2, '0');
+    return `${pad(date.getHours())}:${pad(date.getMinutes())}:${pad(date.getSeconds())}`;
+  }
+  // Timestamps inside a long session cross day boundaries, so always carry the date:
+  // "今天 09:10" / "昨天 18:12" / "11-16 08:59" / "2025-11-16 08:59".
+  // data_as_of 是 UTC，必须转本地，否则会比实际时间差 8 小时
+  function fmtLocalHM(iso) {
+    const date = new Date(iso);
+    if (!date || Number.isNaN(date.getTime())) return null;
+    return String(date.getHours()).padStart(2, '0') + ':' + String(date.getMinutes()).padStart(2, '0');
+  }
+
+  function fmtWhen(ts) {
+    if (!ts) return '—';
+    const date = new Date(ts);
+    const pad = (n) => String(n).padStart(2, '0');
+    const clock = `${pad(date.getHours())}:${pad(date.getMinutes())}`;
+    const startOfDay = (d) => new Date(d.getFullYear(), d.getMonth(), d.getDate()).getTime();
+    const days = Math.round((startOfDay(new Date()) - startOfDay(date)) / 86400000);
+    if (days === 0) return '今天 ' + clock;
+    if (days === 1) return '昨天 ' + clock;
+    const md = `${pad(date.getMonth() + 1)}-${pad(date.getDate())}`;
+    if (date.getFullYear() === new Date().getFullYear()) return `${md} ${clock}`;
+    return `${date.getFullYear()}-${md} ${clock}`;
+  }
+  function fmtRel(unix) {    if (!unix) return '';
+    const diff = Date.now() / 1000 - unix;
+    if (diff < 60) return '刚刚';
+    if (diff < 3600) return Math.floor(diff / 60) + ' 分钟前';
+    if (diff < 86400) return Math.floor(diff / 3600) + ' 小时前';
+    if (diff < 86400 * 7) return Math.floor(diff / 86400) + ' 天前';
+    return fmtWhen(unix * 1000);
+  }
+
+  function request(method, params) {
+    const id = nextId++;
+    return new Promise((resolve, reject) => {
+      pending.set(id, { resolve, reject });
+      window.parent.postMessage({ jsonrpc: '2.0', id, method, params }, '*');
+    });
+  }
+
+  window.addEventListener('message', (event) => {
+    if (event.source !== window.parent) return;
+    const msg = event.data;
+    if (!msg || msg.jsonrpc !== '2.0') return;
+    if (msg.id && pending.has(msg.id)) {
+      const p = pending.get(msg.id);
+      pending.delete(msg.id);
+      msg.error ? p.reject(msg.error) : p.resolve(msg.result);
+      return;
+    }
+    if (msg.method === 'ui/notifications/tool-result') {
+      const sc = msg.params && msg.params.structuredContent;
+      if (sc) render(sc);
+    }
+    if (msg.method === 'ui/notifications/host-context-changed') {
+      const theme = msg.params && msg.params.theme;
+      if (theme) document.body.dataset.theme = theme;
+    }
+  });
+
+  // Ask the host to open a path/URL. Codex renders inside a sandboxed frame, where a plain
+  // <a href> or window.open() does nothing; ui/open-link is the supported route.
+  function openLink(url) {
+    if (!url) return;
+    request('ui/open-link', { url })
+      .catch(() => {
+        try { window.open(url, '_blank', 'noopener'); } catch (error) { /* nothing else we can do */ }
+      });
+  }
+
+  // Turn paths / URLs inside plain text into clickable links. The character classes stop at
+  // brackets and CJK punctuation so markdown like [文字](URL) and "路径，说明" stay intact,
+  // and a path must contain at least two segments so prose is never linkified by accident.
+  const LINK_RE = /https?:\/\/[^\s<>"'()\[\]，。；：！？]+|(?:[A-Za-z]:\\|\/)[^\s<>"'()\[\]，。；：！？]*\/[^\s<>"'()\[\]，。；：！？]*/g;
+  function linkify(text) {
+    const raw = String(text == null ? '' : text);
+    let out = '';
+    let last = 0;
+    raw.replace(LINK_RE, (match, offset) => {
+      const trimmed = match.replace(/[.,;:!?、）]+$/, '');
+      if (!trimmed || trimmed.length > 300) return match;
+      out += esc(raw.slice(last, offset));
+      let href = trimmed;
+      if (!/^https?:\/\//.test(trimmed)) {
+        // Windows path -> file URL; a bare "/x/y" has no drive letter, so leave it as the
+        // raw path and let the host resolve it against the workspace.
+        href = /^[A-Za-z]:[\\/]/.test(trimmed)
+          ? 'file:///' + trimmed.replace(/\\/g, '/')
+          : trimmed;
+      }
+      out += `<a href="#" class="dsh-link" data-href="${esc(href)}">${esc(trimmed)}</a>`;
+      last = offset + trimmed.length;
+      return match;
+    });
+    out += esc(raw.slice(last));
+    return out;
+  }
+
+  document.addEventListener('click', (event) => {
+    const a = event.target.closest('a.dsh-link');
+    if (!a) return;
+    event.preventDefault();
+    openLink(a.getAttribute('data-href'));
+  });
+
+  function showError(text) {
+    $('error').textContent = text;
+    $('error').classList.remove('hide');
+    $('overview').classList.add('hide');
+    $('stats').classList.add('hide');
+  }
+
+  // The bar publishes the thread it resolved into localStorage (same origin). The host
+  // sometimes hands us a "client-new-thread:..." placeholder instead of a real UUID, and
+  // the server prefers _meta over these args, so this only fills that gap.
+  function storedThreadId() {
+    try {
+      const value = localStorage.getItem('dsh.currentThread') || '';
+      return /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i.test(value) ? value : null;
+    } catch (error) {
+      return null;
+    }
+  }
+
+  function getData(options) {
+    const opts = options || {};
+    const args = {};
+    const threadId = state.threadId || storedThreadId();
+    if (threadId) args.thread_id = threadId;
+    if (opts.itemsFor) args.items_for = opts.itemsFor;
+    else if (opts.lite) args.include_items = false;
+    if (opts.details) args.include_details = true;
+    return request('tools/call', { name: 'show_session_dashboard', arguments: args })
+      .then((result) => {
+        const data = result && result.structuredContent;
+        if (!data) {
+          if (!opts.silent) {
+            const text = (result && result.content && result.content[0] && result.content[0].text) || '没有数据';
+            showError(text);
+          }
+          return;
+        }
+        if ((opts.lite || opts.itemsFor) && state.data) {
+          const previous = new Map(state.data.turns.map((t) => [t.index, t]));
+          for (const turn of data.turns) {
+            const old = previous.get(turn.index);
+            if (old && old.items && old.items.length && !(turn.items && turn.items.length)) {
+              turn.items = old.items;
+            }
+          }
+        }
+        render(data, opts.force);
+      })
+      .catch(() => { /* keep the last good view */ });
+  }
+
+  function render(data, force) {
+    const head = data.summary || {};
+    const sig = JSON.stringify([
+      head.turns, head.steps, head.running,
+      head.total && head.total.total_tokens,
+      head.context && head.context.used,
+      head.quota && head.quota.api && head.quota.api.weekly_percent,
+      head.last_turn && head.last_turn.duration_ms,
+      (data.turns || []).map((t) => t.item_count).join(','),
+    ]);
+    if (!force && sig === state.sig) return;
+    state.sig = sig;
+    state.data = data;
+    state.threadId = (data.thread && data.thread.thread_id) || state.threadId;
+    $('error').classList.add('hide');
+    $('overview').classList.toggle('hide', state.tab !== 'overview');
+    $('stats').classList.toggle('hide', state.tab !== 'stats');
+    $('trace').classList.toggle('hide', state.tab !== 'trace');
+    $('agents').classList.toggle('hide', state.tab !== 'agents');
+
+    const s = data.summary || {};
+    const thread = data.thread || {};
+    const current = s.last_turn || {};
+    const last = s.last_completed || current;
+    const total = s.total || {};
+    const ctx = s.context || {};
+    const quota = s.quota || {};
+
+    $('model').textContent = thread.model || '—';
+    $('thread-title').textContent = (thread.title || '未命名会话').slice(0, 60);
+    $('updated').textContent = thread.updated_at ? '更新于 ' + fmtRel(thread.updated_at) : '';
+
+    $('c-turns').textContent = (s.turns ?? '—') + ' / ' + (s.steps ?? '—');
+    // "工具 N 项" is the last turn's item count, not a session total — say so.
+    $('c-turns-cap').textContent = '轮 / 步 · 最近一轮工具 ' + (last.item_count ?? 0) + ' 项';
+
+    $('c-speed').innerHTML = (last.speed ?? '—') + ' <small>tok/s</small>';
+    $('c-speed-cap').textContent = s.running ? '本轮进行中 · 上一轮' : '本轮首 token 延迟 ' + fmtDur(last.ttft_ms);
+
+    $('c-total').innerHTML = fmtNum(total.total_tokens) + ' <small>tok</small>';
+    $('c-total-cap').textContent = '入 ' + fmtNum(total.input_tokens) + ' · 出 ' + fmtNum(total.output_tokens);
+
+    $('c-cache').textContent = fmtPct(s.cache_hit_pct);
+    $('c-cache-cap').textContent = '命中 ' + fmtInt(total.cached_input_tokens) + ' tok';
+
+    $('c-ctx').textContent = fmtPct(ctx.pct);
+    $('c-ctx-cap').textContent = fmtInt(ctx.used) + ' / ' + fmtInt(ctx.window);
+
+    // Only the per-conversation number belongs under this label. A brand-new conversation
+    // comes back as "unavailable" until the server attributes it, and the account-wide
+    // percentage must never be shown here as if it were this conversation's cost.
+    const apiQuota = quota.api || {};
+    const asOf = fmtLocalHM(apiQuota.data_as_of);
+    if (typeof apiQuota.weekly_percent === 'number') {
+      $('c-quota').textContent = apiQuota.weekly_percent.toFixed(2) + '%';
+      // 不再解释服务端状态（"未完全"没有可行动含义），只说明数据到什么时候
+      $('c-quota-cap').textContent = '占每周限额' + (asOf ? ' · 截至 ' + asOf + '（本地）' : '');
+    } else {
+      $('c-quota').textContent = '—';
+      $('c-quota-cap').textContent = apiQuota.data_status === 'unavailable' ? '新对话，稍后才统计' : '未取到';
+    }
+
+    const kv = [];
+    if (current.running) {
+      const elapsed = current.started_at ? (Date.now() / 1000 - current.started_at) * 1000 : 0;
+      kv.push(['状态', '本轮进行中' + (elapsed > 0 ? ' · 已运行 ' + fmtDur(elapsed) : '')]);
+    }
+    const tok = (n) => fmtInt(n) + ' tok';
+    kv.push(
+      ['输入', tok(current.tokens && current.tokens.input_tokens)],
+      ['输出', tok(current.tokens && current.tokens.output_tokens)],
+      ['其中推理', tok(current.tokens && current.tokens.reasoning_output_tokens)],
+      ['缓存命中', fmtPct(current.cache_hit_pct)],
+    );
+    if (current.running) {
+      kv.push(['工具用时', fmtDur(current.tool_ms)]);
+    } else {
+      kv.push(['模型用时', fmtDur(current.model_ms)]);
+      kv.push(['工具用时', fmtDur(current.tool_ms)]);
+      kv.push(['首 token 延迟', fmtDur(current.ttft_ms)]);
+      kv.push(['总用时', fmtDur(current.duration_ms)]);
+    }
+    const ctxWindow = s.context && s.context.window;
+    kv.push(['上下文占用', fmtInt(current.context_used) + (ctxWindow ? ' / ' + fmtInt(ctxWindow) : '')]);
+    if (s.compactions) kv.push(['自动压缩', s.compactions + ' 次']);
+    $('last-turn').innerHTML = kv.map(([k, v]) => `<dt>${esc(k)}</dt><dd>${esc(v)}</dd>`).join('');
+
+    renderRecent(data.turns || []);
+    renderStats(data.turns || []);
+    renderTrace(data.turns || []);
+    renderAgents(data);
+    renderEnv(data);
+    $('note').textContent = `只读本地记录${data.meta && data.meta.parse_errors ? ' · ' + data.meta.parse_errors + ' 行解析失败' : ''}`;
+    ensureItems();
+  }
+
+  // Expanded rows may arrive without item details after a lightweight refresh.
+  function ensureItems() {
+    if (!state.data) return;
+    const missing = [...state.expanded].find((idx) => {
+      if (state.attempted.has(idx)) return false;
+      const turn = state.data.turns.find((t) => t.index === idx);
+      return turn && (!turn.items || !turn.items.length) && turn.item_count > 0;
+    });
+    if (missing == null) return;
+    state.attempted.add(missing);
+    getData({ itemsFor: missing, silent: true, force: true });
+  }
+
+  function renderRecent(turns) {
+    const rows = turns.slice(-5).reverse().map((t) => {
+      return `<tr>
+        <td>第 ${t.index} 轮</td>
+        <td>${t.steps}</td>
+        <td>${fmtInt(t.tokens.input_tokens)}</td>
+        <td>${fmtInt(t.tokens.output_tokens)}</td>
+        <td>${fmtPct(t.cache_hit_pct)}</td>
+        <td>${t.running ? '—' : (t.speed == null ? '—' : t.speed + ' tok/s')}</td>
+        <td>${t.running ? '进行中' : fmtDur(t.duration_ms)}</td>
+      </tr>`;
+    });
+    $('recent').innerHTML = rows.join('') || '<tr><td colspan="7" class="mut">暂无数据</td></tr>';
+  }
+
+  function renderStats(turns) {
+    const s = state.data.summary || {};
+    $('stats-summary').textContent = `${s.turns ?? 0} 轮 · ${s.steps ?? 0} 步 · 平均 ${avgSpeed(turns)} tok/s` + (turns.length < (s.turns || 0) ? ` · 显示最近 ${turns.length} 轮` : '');
+    const rows = [];
+    let sumSteps = 0, sumIn = 0, sumOut = 0, sumCached = 0, sumModel = 0, sumTool = 0, sumDur = 0;
+    for (const t of turns) {
+      sumSteps += t.steps || 0;
+      sumIn += t.tokens.input_tokens || 0;
+      sumOut += t.tokens.output_tokens || 0;
+      sumCached += t.tokens.cached_input_tokens || 0;
+      sumModel += t.model_ms || 0;
+      sumTool += t.tool_ms || 0;
+      sumDur += t.duration_ms || 0;
+      const open = state.all || state.expanded.has(t.index);
+      const modelMs = t.model_ms || 0;
+      const toolMs = t.tool_ms || 0;
+      const total = Math.max(modelMs + toolMs, 1);
+      const pctModel = (modelMs / total) * 100;
+      const pctTool = (toolMs / total) * 100;
+      const cum = state.opts.ctxMode === 'cum';
+      const ctxValue = cum ? t.context_sum : t.context_used;
+      const prevValue = cum ? t.context_sum_prev : t.context_prev;
+      const delta = state.opts.delta && prevValue && ctxValue ? ctxValue - prevValue : null;
+      const ctxCell = fmtInt(ctxValue) + (delta != null ? ` <span class="delta${delta < 0 ? ' neg' : ''}">${delta >= 0 ? '+' : ''}${fmtInt(delta)}</span>` : '');
+      rows.push(`<tr class="clickable" data-turn="${t.index}">
+        <td class="turncell"><span class="caret">${open ? '▾' : '▸'}</span>第 ${t.index} 轮${t.aborted ? ' <span class="abort">中断</span>' : ''}<div class="cap">${esc(triggerLabel(t.trigger))}</div></td>
+        <td class="dlgcell"><div class="dlg">
+          <div class="q" title="${esc(t.user_text || '')}">${esc(t.user_text || '（无用户消息）')}</div>
+          ${t.assistant_text ? `<div class="a" title="${esc(t.assistant_text)}">${esc(t.assistant_text)}</div>` : ''}
+          ${chipsHtml(t)}
+        </div></td>
+        <td>${t.steps}</td>
+        <td>${ctxCell}</td>
+        <td>${fmtInt(t.tokens.input_tokens)}</td>
+        <td>${fmtInt(t.tokens.output_tokens)}</td>
+        <td>${fmtPct(t.cache_hit_pct)}</td>
+        <td>${t.running ? '—' : fmtDur(t.ttft_ms)}</td>
+        <td>${t.running ? '—' : (t.speed == null ? '—' : t.speed + ' tok/s')}</td>
+        <td>${fmtDur(t.model_ms)}</td>
+        <td>${fmtDur(t.tool_ms)}</td>
+        <td>${t.running ? '进行中' : fmtDur(t.duration_ms)}</td>
+        <td class="gantt">${t.running ? '' : `<div class="bar" style="width:100%"><i class="m" style="width:${pctModel}%"></i><i class="t" style="width:${pctTool}%"></i></div>`}</td>
+      </tr>`);
+      if (open) rows.push(detailRow(t));
+    }
+    if (state.opts.total) {
+      const truncated = turns.length < (s.turns || 0);
+      const totals = s.total || {};
+      const totalInput = totals.input_tokens || sumIn;
+      rows.push(`<tr class="totalrow"><td>合计${truncated ? '（本窗口）' : ''}</td><td></td><td>${s.steps ?? sumSteps}</td><td>${fmtInt(s.context && s.context.used)}</td><td>${fmtInt(totalInput)}</td><td>${fmtInt(totals.output_tokens || sumOut)}</td><td>${ratioPct(totals.cached_input_tokens || sumCached, totalInput)}</td><td>—</td><td>${avgSpeed(turns)} tok/s</td><td>${fmtDur(sumModel)}</td><td>${fmtDur(sumTool)}</td><td>${fmtDur(sumDur)}</td><td></td></tr>`);
+    }
+    $('stats-body').innerHTML = rows.join('') || '<tr><td colspan="13" class="mut">暂无数据</td></tr>';
+  }
+
+  function stepsHtml(turn) {
+    const hidden = new Set(['UserMessage', 'AgentMessage', 'ContextCompaction']);
+    const steps = turn.steps_detail || [];
+    const stepHead = `<div class="srow head"><span class="n">#</span><span class="tm">时间</span><span class="num">上下文</span><span class="num">输出</span><span class="num">缓存</span><span class="num">模型用时</span></div>`;
+    const stepRows = steps.map((step, i) => `<div class="srow">
+        <span class="n">${i + 1}</span>
+        <span class="tm">${step.ts ? fmtClock(step.ts) : '—'}</span>
+        <span class="num">${fmtInt(step.input)}</span>
+        <span class="num">${fmtInt(step.output)}</span>
+        <span class="num">${ratioPct(step.cached, step.input)}</span>
+        <span class="num">${fmtDur(step.duration_ms)}</span>
+      </div>`).join('');
+    const items = (turn.items || []).filter((item) => state.opts.events || !hidden.has(item.type));
+    const itemRows = items.map((it) => {
+      const summary = `<span class="tag">${esc(it.label)}</span><span class="nm" title="${esc(it.name || '')}">${esc(it.name || '')}</span><span class="d">${it.ms ? fmtDur(it.ms) : '—'}</span>`;
+      return it.text
+        ? `<details class="it"><summary>${summary}</summary><div class="itext">${linkify(it.text)}</div></details>`
+        : `<div class="itemrow">${summary}</div>`;
+    }).join('');
+    return `<div class="steps">
+      <div class="sblock"><div class="shead">步骤</div>${stepHead}${stepRows || '<div class="srow"><span class="mut">本轮没有步骤数据</span></div>'}</div>
+      ${itemRows ? `<div class="sblock"><div class="shead">工具与事件</div>${itemRows}</div>` : ''}
+    </div>`;
+  }
+
+  function detailRow(turn) {
+    return `<tr class="detail"><td colspan="13">${stepsHtml(turn)}</td></tr>`;
+  }
+
+  function renderTrace(turns) {
+    const query = state.query.trim().toLowerCase();
+    const list = turns.filter((t) => {
+      if (!query) return true;
+      const haystack = [t.user_text, t.assistant_text, ...(t.items || []).map((i) => `${i.label} ${i.name}`)].join(' ').toLowerCase();
+      return haystack.includes(query);
+    });
+    const rows = list.map((t) => {
+      const open = state.traceOpen.has(t.index);
+      const duration = t.duration_ms || 0;
+      const segments = duration
+        ? (t.timeline || []).map((seg) => {
+            const left = Math.min((seg.start / duration) * 100, 99.4);
+            const width = Math.max(Math.min((seg.len / duration) * 100, 100 - left), 0.5);
+            return `<i class="seg" style="left:${left.toFixed(2)}%;width:${width.toFixed(2)}%" title="${esc(seg.label)} ${esc(seg.name)} · ${fmtDur(seg.len)}"></i>`;
+          }).join('')
+        : '';
+      return `<div class="trow" data-turn="${t.index}">
+          <div class="tmeta">
+            <div class="tlabel">第 ${t.index} 轮<span class="cap">${esc(triggerLabel(t.trigger))}</span>${t.aborted ? '<span class="abort">中断</span>' : ''}</div>
+            <div class="tq" title="${esc(t.user_text || '')}">${esc(t.user_text || '（无用户消息）')}</div>
+          </div>
+          <div class="ttrack"><div class="tbar">${segments}</div></div>
+          <div class="tdur">${t.running ? '进行中' : fmtDur(t.duration_ms)}</div>
+        </div>${open ? `<div class="tdetail">${recordsHtml(t)}</div>` : ''}`;
+    });
+    $('trace-list').innerHTML = rows.join('') || '<div class="empty">没有匹配的轮次</div>';
+    $('trace-summary').textContent = `${list.length} 轮 · ${list.reduce((a, t) => a + (t.steps || 0), 0)} 步` + (list.length < (state.data.summary.turns || 0) ? ` · 显示最近 ${list.length} 轮` : '');
+    list.filter((t) => state.traceOpen.has(t.index)).forEach((t) => ensureDetails(t.index));
+  }
+
+  function ensureDetails(index) {
+    if (state.detailTurns.has(index) || state.detailPending.has(index)) return;
+    state.detailPending.add(index);
+    getData({ itemsFor: index, details: true, silent: true, force: true })
+      .finally(() => { state.detailPending.delete(index); state.detailTurns.add(index); });
+  }
+
+  const FOLD_TYPES = new Set(['CommandExecution', 'McpToolCall', 'FileChange', 'WebSearch', 'SubAgentActivity', 'Extension', 'Reasoning']);
+
+  function recordHtml(turn, it, index) {
+    const key = `${turn.index}:${index}`;
+    const open = state.openRec === key;
+    return `<div class="rec${open ? ' on' : ''}" data-turn="${turn.index}" data-idx="${index}">
+        <span class="rt">${it.start ? fmtClock(it.start) : '—'}</span>
+        <span class="rl">${esc(it.label)}</span>
+        <span class="rn" title="${esc(it.name || '')}">${esc(it.name || '')}</span>
+        <span class="rd">${it.ms ? fmtDur(it.ms) : '—'}</span>
+      </div>${open ? `<div class="insp">${inspectorHtml(it)}</div>` : ''}`;
+  }
+
+  function recordsHtml(turn) {
+    const hidden = new Set(['UserMessage', 'AgentMessage', 'ContextCompaction']);
+    const items = (turn.items || []).filter((item) => state.opts.events || !hidden.has(item.type));
+    if (!items.length) return '<div class="rec empty-rec">这一轮没有可展示的记录</div>';
+    const out = [];
+    let i = 0;
+    while (i < items.length) {
+      const it = items[i];
+      let j = i + 1;
+      if (state.opts.foldCalls && FOLD_TYPES.has(it.type)) {
+        while (j < items.length && items[j].type === it.type) j += 1;
+      }
+      const group = items.slice(i, j);
+      if (group.length > 1) {
+        const key = `${turn.index}:${i}`;
+        const expanded = state.foldedGroups.has(key);
+        const total = group.reduce((sum, row) => sum + (row.ms || 0), 0);
+        const names = group.slice(0, 2).map((row) => row.name).filter(Boolean).join(' · ');
+        out.push(`<div class="rec group" data-group="${key}" data-turn="${turn.index}">
+            <span class="rt">${group[0].start ? fmtClock(group[0].start) : '—'}</span>
+            <span class="rl">${esc(it.label)} ×${group.length}</span>
+            <span class="rn" title="${esc(names)}">${esc(names)}</span>
+            <span class="rd">${total ? fmtDur(total) : '—'}</span>
+          </div>`);
+        if (expanded) {
+          group.forEach((row, k) => out.push(recordHtml(turn, row, i + k)));
+        }
+        i = j;
+        continue;
+      }
+      out.push(recordHtml(turn, it, i));
+      i += 1;
+    }
+    return out.join('');
+  }
+
+  function highlight(text) {
+    const re = /("(?:\\.|[^"\\])*"|'(?:\\.|[^'\\])*')|(#[^\n]*)|\b(-{1,2}[A-Za-z][\w-]*)\b|\b(\d+(?:\.\d+)?)\b/g;
+    let out = '';
+    let last = 0;
+    let match;
+    while ((match = re.exec(text)) !== null) {
+      out += esc(text.slice(last, match.index));
+      const cls = match[1] ? 'tok-s' : match[2] ? 'tok-c' : match[3] ? 'tok-k' : 'tok-n';
+      out += `<span class="${cls}">${esc(match[0])}</span>`;
+      last = re.lastIndex;
+    }
+    out += esc(text.slice(last));
+    return out;
+  }
+
+  function inspectorHtml(it) {
+    const d = it.detail || {};
+    const blocks = [];
+    const add = (label, value) => {
+      if (value === undefined || value === null || value === '') return;
+      blocks.push(`<div class="ib"><div class="il">${esc(label)}</div><pre>${highlight(String(value))}</pre></div>`);
+    };
+    if (d.command) add('命令', d.command);
+    if (d.cwd) add('工作目录', d.cwd);
+    if (d.status) add('状态', d.status + (d.exit_code !== undefined ? ` · 退出码 ${d.exit_code}` : ''));
+    if (d.output) add(d.output_truncated ? '输出（已截断）' : '输出', d.output);
+    if (d.arguments) add('参数', d.arguments);
+    if (d.result) add(d.result_truncated ? '结果（已截断）' : '结果', d.result);
+    if (d.is_error) add('错误', '是');
+    if (d.query) add('查询', d.query);
+    if (d.results && d.results.length) add('结果摘要', d.results.join('\n'));
+    if (d.changes && d.changes.length) {
+      add('文件变更', d.changes.map((c) => `${c.kind}  ${c.path}\n${c.diff}`).join('\n\n') + (d.files > d.changes.length ? `\n\n…共 ${d.files} 个文件` : ''));
+    }
+    if (d.text) add('正文', d.text);
+    if (d.summary) add('推理摘要', d.summary);
+    if (!blocks.length && !it.name) blocks.push('<div class="ib"><div class="il">没有更多字段</div></div>');
+    return blocks.join('');
+  }
+
+  const CHIP_LABELS = { CommandExecution: '命令', FileChange: '改文件', McpToolCall: 'MCP', WebSearch: '搜索', SubAgentActivity: '子代理', CollabAgentToolCall: '协作' };
+  function chipsHtml(turn) {
+    const counts = turn.tool_counts || {};
+    const parts = Object.keys(counts)
+      .filter((key) => counts[key] > 0)
+      .map((key) => `${CHIP_LABELS[key] || key} ×${counts[key]}`);
+    return parts.length ? `<div class="chips">${esc(parts.join(' · '))}</div>` : '';
+  }
+
+  function triggerLabel(trigger) {
+    const map = {
+      composer: '用户', user: '用户', resume_interrupted_task: '续跑', goal: '目标',
+      guardian_review: '守护', automation_heartbeat_scheduled: '定时', null: '—',
+    };
+    return map[trigger] ?? trigger ?? '—';
+  }
+  function avgSpeed(turns) {
+    const list = turns.filter((t) => typeof t.speed === 'number');
+    if (!list.length) return '—';
+    return (list.reduce((a, t) => a + t.speed, 0) / list.length).toFixed(1);
+  }
+  function ratioPct(part, total) {
+    if (!total) return '—';
+    return ((100 * part) / total).toFixed(1) + '%';
+  }
+
+  // ---- 代理页：Codex 独有的委派账本 + 工作足迹 ----
+  function renderAgents(data) {
+    const s = data.summary || {};
+    const sub = s.subagents || {};
+    const fp = s.footprint || {};
+    const items = sub.items || [];
+    const maxTokens = Math.max(1, ...items.map((i) => i.tokens || 0));
+
+    $('agents-summary').textContent = sub.children
+      ? `${sub.edges} 次委派 · ${sub.children} 个子代理 · ${fmtNum(sub.tokens)} tok` +
+        (sub.share_pct != null ? ` · 占总消耗 ${sub.share_pct}%` : '')
+      : '这条会话没有委派子代理';
+
+    if (!items.length) {
+      $('agents-list').innerHTML = '<div class="empty" style="margin:12px">没有子代理记录</div>';
+    } else {
+      $('agents-list').innerHTML = items.map((item) => {
+        const width = Math.max(2, Math.round((item.tokens / maxTokens) * 100));
+        const model = item.model || '—';
+        const effort = item.effort || '';
+        const extra = [];
+        if (item.times > 1) extra.push(`复用 ${item.times} 次`);
+        if (item.nested) extra.push(`下辖 ${item.nested}`);
+        const name = item.label || item.short;
+        return `<div class="arow">
+            <span class="aname" title="${esc(item.id)}">${esc(name)}</span>
+            <span class="apath" title="${esc(item.id)}">${esc(item.path || '')}</span>
+            <span class="amodel">${esc(model)}${effort ? ` <em>${esc(effort)}</em>` : ''}</span>
+            <span class="abar"><i style="width:${width}%"></i></span>
+            <span class="atokens">${fmtNum(item.tokens)}</span>
+          </div>`;
+      }).join('');
+    }
+
+    const models = (sub.models || []).map((m) => `${m.model} ×${m.count}`).join(' · ');
+    const mcp = (fp.mcp || []).map((m) => `${m.server} ${m.count}`).join(' · ');
+    const kv = [
+      ['改动的文件', `${fp.files || 0} 个`],
+      ['执行的命令', fmtInt(fp.commands || 0)],
+      ['MCP 调用', `${fmtInt(fp.mcp_calls || 0)} 次` + (mcp ? `（${mcp}）` : '')],
+      ['网页搜索', `${fmtInt(fp.searches || 0)} 次`],
+      ['自动压缩', `${fp.compactions || 0} 次`],
+      ['子代理活动', Object.entries(fp.subagent_events || {})
+        // 事件名来自 Codex 的 rollout，映射成中文，未知的保留原文
+        .map(([k, v]) => `${({ started: '启动', interacted: '交互', completed: '完成',
+                              spawned: '派生', resumed: '恢复', aborted: '中止' })[k] || k} ${v}`)
+        .join(' · ') || '—'],
+      ['子代理模型', models || '—'],
+    ];
+    $('footprint-kv').innerHTML = kv.map(([k, v]) => `<dt>${esc(k)}</dt><dd>${esc(v)}</dd>`).join('');
+
+    const files = fp.top_files || [];
+    $('footprint-files').innerHTML = files.length
+      ? files.map((f) => {
+        // the row shows the base name, but the link must carry the full path
+        const href = 'file:///' + String(f.path || '').replace(/\\/g, '/').replace(/^\//, '');
+        return `<div class="frow"><a class="dsh-link fname" href="#" data-href="${esc(href)}" title="${esc(f.path)}">${esc(f.name)}</a><span class="fcount">${f.count} 次</span></div>`;
+      }).join('')
+      : '<span class="mut">没有文件改动</span>';
+
+    // 代理间往来消息（正文加密，只展示收发方）
+    const msgs = s.agent_msgs || { count: 0, by_author: {}, items: [] };
+    if (!msgs.count) {
+      $('agent-msgs-section').classList.add('hide');
+    } else {
+      $('agent-msgs-section').classList.remove('hide');
+      const authors = Object.entries(msgs.by_author || {}).sort((a, b) => b[1] - a[1]);
+      const topAuthors = authors.slice(0, 8);
+      const maxMsgs = Math.max(1, ...authors.map(([, count]) => count));
+      $('agent-msgs-kv').innerHTML =
+        `<dt>消息总数</dt><dd>${fmtInt(msgs.count)} 条</dd>` +
+        `<dt>参与的代理</dt><dd>${authors.length} 个</dd>`;
+      $('agent-msgs-list').innerHTML = topAuthors
+        .map(([name, count]) => {
+          const share = Math.max(2, Math.round((count / maxMsgs) * 100));
+          return `<div class="mmsg"><span class="mn">${esc(name)}</span><span class="mbar"><i style="width:${share}%"></i></span><span class="mc">${count} 条</span></div>`;
+        })
+        .join('');
+    }
+  }
+
+  // ---- 概览页底部：运行环境（Codex 独有的沙箱/审批姿态）----
+  function renderEnv(data) {
+    const env = (data.summary || {}).env;
+    const section = $('env-section');
+    if (!env) {
+      section.classList.add('hide');
+      return;
+    }
+    section.classList.remove('hide');
+
+    const approvalText = {
+      'on-request': '按需批准',
+      'on-failure': '失败后询问',
+      'never': '从不询问',
+      'untrusted': '仅可信命令免问',
+    }[env.approval_policy] || env.approval_policy || '—';
+
+    const sandboxText = {
+      'workspace-write': '仅工作区可写',
+      'read-only': '全部只读',
+      'danger-full-access': '无限制',
+    }[env.sandbox_type] || env.sandbox_type || '—';
+
+    const networkText = env.network === true ? '允许' : (env.network === false ? '禁止' : '—');
+    const roots = env.writable_roots || [];
+    const shown = roots.filter((p) => !p.includes('visualizations'));
+
+    const rows = [
+      ['工作目录', env.cwd || '—'],
+      ['审批模式', approvalText],
+      ['沙箱', sandboxText],
+      ['网络访问', networkText],
+      ['模型', (env.model || '—') + (env.effort ? ` · 推理强度 ${env.effort}` : '')],
+    ];
+    const rules = (data.summary || {}).rules;
+    if (rules) {
+      rows.push(['生效规则', `${rules.file} · ${fmtInt(rules.chars)} 字`]);
+    }
+    $('env-kv').innerHTML = rows.map(([k, v]) => `<dt>${esc(k)}</dt><dd>${esc(v)}</dd>`).join('');
+
+    if (!shown.length) {
+      $('env-roots').innerHTML = '<span class="mut">没有额外可写目录</span>';
+    } else {
+      $('env-roots').innerHTML =
+        '<span class="sub">可写目录</span>' +
+        shown.map((p) => `<span class="rp" title="${esc(p)}">${esc(p)}</span>`).join('');
+    }
+
+    // 会话中途的设置变更（模型 / 审批 / 权限档案）
+    const changes = (data.summary || {}).settings_changes || [];
+    const box = $('env-changes');
+    if (!changes.length) {
+      box.classList.add('hide');
+    } else {
+      box.classList.remove('hide');
+      const FIELD = {
+        model: '模型',
+        effort: '推理强度',
+        approval_policy: '审批模式',
+        sandbox: '沙箱',
+        network: '网络',
+      };
+      const VALUE = {
+        'workspace-write': '工作区可写',
+        'read-only': '只读',
+        'danger-full-access': '无限制',
+        'on-request': '按需批准',
+        'on-failure': '失败后询问',
+        'never': '从不询问',
+        'untrusted': '仅可信命令',
+        true: '允许',
+        false: '禁止',
+        none: '—',
+      };
+      const show = (value) => {
+        const key = String(value);
+        return esc(VALUE[key] !== undefined ? VALUE[key] : key);
+      };
+      $('env-changes-list').innerHTML = changes
+        .slice(-12)
+        .reverse()
+        .map((change) => {
+          // 模型与推理强度成对出现：只渲染变化字段会丢掉另一半状态
+          const touched = (change.changes || []).some((c) => c.field === 'model' || c.field === 'effort');
+          const stateBefore = change.before || {};
+          const stateAfter = change.after || {};
+          const pieces = [];
+          if (touched && (stateBefore.model || stateAfter.model)) {
+            const left = [stateBefore.model, stateBefore.effort].filter(Boolean).join(' ');
+            const right = [stateAfter.model, stateAfter.effort].filter(Boolean).join(' ');
+            pieces.push(`模型/推理强度 ${esc(left)} → <b>${esc(right)}</b>`);
+          }
+          (change.changes || [])
+            .filter((c) => c.field !== 'model' && c.field !== 'effort')
+            .forEach((c) => pieces.push(`${esc(FIELD[c.field] || c.field)} ${show(c.from)} → <b>${show(c.to)}</b>`));
+          const parts = pieces.join(' · ');
+          const when = fmtWhen(change.ts);
+          const after = `第 ${change.after_turns} 轮后`;
+          return `<div class="crow"><span class="ct">${when}</span><span class="cw">${after}</span><span class="cd">${parts}</span></div>`;
+        })
+        .join('');
+    }
+  }
+
+  document.querySelectorAll('.tab').forEach((btn) => {
+    btn.addEventListener('click', () => {
+      state.tab = btn.dataset.tab;
+      document.querySelectorAll('.tab').forEach((b) => b.classList.toggle('on', b === btn));
+      if (state.data) render(state.data, true);
+    });
+  });
+
+  $('stats-body').addEventListener('click', (event) => {
+    const row = event.target.closest('tr[data-turn]');
+    if (!row) return;
+    const index = Number(row.dataset.turn);
+    if (state.all) { state.all = false; }
+    state.attempted.delete(index);
+    state.expanded.has(index) ? state.expanded.delete(index) : state.expanded.add(index);
+    renderStats(state.data.turns || []);
+    ensureItems();
+  });
+
+  $('refresh').addEventListener('click', () => {
+    $('refresh').textContent = '刷新中…';
+    getData({ force: true }).finally(() => { $('refresh').textContent = '刷新'; });
+  });
+
+  $('opt-total').addEventListener('change', (event) => {
+    state.opts.total = event.target.checked;
+    renderStats(state.data.turns || []);
+  });
+  $('opt-events').addEventListener('change', (event) => {
+    state.opts.events = event.target.checked;
+    renderStats(state.data.turns || []);
+    renderTrace(state.data.turns || []);
+  });
+  $('opt-delta').addEventListener('change', (event) => {
+    state.opts.delta = event.target.checked;
+    renderStats(state.data.turns || []);
+  });
+  document.querySelectorAll('#opt-ctxmode button').forEach((btn) => {
+    btn.addEventListener('click', () => {
+      state.opts.ctxMode = btn.dataset.mode;
+      document.querySelectorAll('#opt-ctxmode button').forEach((b) => b.classList.toggle('on', b === btn));
+      renderStats(state.data.turns || []);
+    });
+  });
+  $('opt-expand').addEventListener('click', () => {
+    state.all = !state.all;
+    $('opt-expand').textContent = state.all ? '收起全部' : '展开全部';
+    renderStats(state.data.turns || []);
+    if (state.all) ensureItems();
+  });
+
+  $('trace-q').addEventListener('input', (event) => {
+    state.query = event.target.value;
+    if (state.data) renderTrace(state.data.turns || []);
+  });
+  $('opt-fold').addEventListener('change', (event) => {
+    state.opts.foldCalls = event.target.checked;
+    if (state.data) renderTrace(state.data.turns || []);
+  });
+  $('trace-list').addEventListener('click', (event) => {
+    const group = event.target.closest('.rec.group[data-group]');
+    if (group) {
+      const key = group.dataset.group;
+      state.foldedGroups.has(key) ? state.foldedGroups.delete(key) : state.foldedGroups.add(key);
+      renderTrace(state.data.turns || []);
+      return;
+    }
+    const rec = event.target.closest('.rec[data-idx]');
+    if (rec) {
+      const key = `${rec.dataset.turn}:${rec.dataset.idx}`;
+      state.openRec = state.openRec === key ? null : key;
+      ensureDetails(Number(rec.dataset.turn));
+      renderTrace(state.data.turns || []);
+      return;
+    }
+    const row = event.target.closest('.trow');
+    if (!row) return;
+    const index = Number(row.dataset.turn);
+    state.traceOpen.has(index) ? state.traceOpen.delete(index) : state.traceOpen.add(index);
+    if (state.traceOpen.has(index)) ensureDetails(index);
+    renderTrace(state.data.turns || []);
+  });
+
+  (async function boot() {
+    // #stats / #trace / #agents open a tab directly (also used by the local render harness).
+    const hash = location.hash.replace('#', '');
+    if (['stats', 'trace', 'agents'].includes(hash)) {
+      state.tab = hash;
+      document.querySelectorAll('.tab').forEach((b) => b.classList.toggle('on', b.dataset.tab === hash));
+    }
+    if (window.parent === window) { showError('请从 Codex 会话内打开。'); return; }
+    try {
+      const init = await request('ui/initialize', {
+        protocolVersion: '2025-06-18',
+        appInfo: { name: 'session-dashboard', version: '0.1.0' },
+        appCapabilities: {},
+      });
+      initialized = true;
+      const theme = init && init.hostContext && init.hostContext.theme;
+      if (theme) document.body.dataset.theme = theme;
+      window.parent.postMessage({ jsonrpc: '2.0', method: 'ui/notifications/initialized' }, '*');
+    } catch (e) {
+      // host may not implement ui/initialize; rendering still works through tool-result.
+    }
+    // The host usually pushes the first result; only self-fetch when nothing arrives.
+    setTimeout(() => { if (!state.data) getData({}); }, 600);
+    // Keep the view live: poll a lightweight summary and refetch only what is expanded.
+    setInterval(() => {
+      if (document.hidden || !state.threadId) return;
+      getData({ lite: true, silent: true });
+    }, REFRESH_MS);
+    document.addEventListener('visibilitychange', () => {
+      if (!document.hidden && state.threadId) getData({ lite: true, silent: true });
+    });
+  })();
+})();
+</script>
+</body>
+</html>
