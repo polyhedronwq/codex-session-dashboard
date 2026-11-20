@@ -150,6 +150,119 @@ const record = (name, ok, detail) => results.push({ name, ok, detail: detail || 
     /启动|交互|完成/.test(agents.activity) && !/started|completed|interacted/.test(agents.activity),
     agents.activity.slice(0, 40));
 
+
+  // ---------- P4：头部、最近一轮、异常态、控件 ----------
+  await clickTab('概览');
+  const head = await frame.evaluate(() => {
+    const get = (id) => (document.getElementById(id) || {}).textContent || '';
+    return {
+      model: get('model'), title: get('thread-title'), auto: get('auto'),
+      updated: get('updated'), refresh: !!document.getElementById('refresh'),
+      kv: [...document.querySelectorAll('#last-turn dt')].map((d) => d.textContent.trim()),
+      recentCols: [...document.querySelectorAll('#recent tr')].map((r) => r.children.length),
+    };
+  });
+
+  record('面板/头部元素齐全（模型/标题/自动刷新/更新时间/刷新按钮）',
+    head.model.trim().length > 0 && head.model.trim() !== '—'
+    && head.title.trim().length > 0 && head.auto.includes('自动刷新')
+    && head.updated.length > 0 && head.refresh,
+    JSON.stringify({ model: head.model, title: head.title, auto: head.auto, updated: head.updated, refresh: head.refresh }));
+
+  record('面板/最近一轮有 6 组以上指标',
+    head.kv.length >= 6 && head.kv.includes('输入') && head.kv.includes('输出'),
+    head.kv.join(','));
+
+  record('面板/最近 5 轮每行列数一致',
+    head.recentCols.length >= 2 && new Set(head.recentCols).size === 1,
+    JSON.stringify(head.recentCols));
+
+  await clickTab('代理');
+  const agentRows = await frame.evaluate(() => [...document.querySelectorAll('#agents-list > *')]
+    .map((row) => row.innerText.replace(/\s+/g, ' ').trim()).filter(Boolean));
+  record('面板/子代理行有名称与数值',
+    agentRows.length >= 1 && agentRows.every((t) => /\d/.test(t) && /[A-Za-z\u4e00-\u9fa5]/.test(t)),
+    JSON.stringify(agentRows.slice(0, 2)));
+
+  // ---------- 异常态：从父页面注入最小 payload ----------
+  const minimal = {
+    ok: true,
+    thread: { id: 'empty-thread', thread_id: 'empty-thread', title: '新对话', model: 'gpt-test' },
+    summary: { ok: true, turns: 0, steps: 0, total: {}, cache_hit_pct: 0, context: {}, quota: { api: null }, last_turn: null, running: false },
+    turns: [],
+  };
+  // 先恢复默认勾选状态，否则"空数据应该显示占位"会被上一段勾选的合计行干扰
+  await frame.evaluate(() => {
+    for (const id of ['opt-total', 'opt-events', 'opt-delta']) {
+      const el = document.getElementById(id);
+      if (el && el.checked) el.click();
+    }
+    const latest = document.querySelector('button[data-mode="latest"]');
+    if (latest) latest.click();
+  });
+  await page.waitForTimeout(250);
+
+  await page.evaluate((payload) => {
+    const frameEl = document.getElementById('frame');
+    frameEl.contentWindow.postMessage({
+      jsonrpc: '2.0',
+      method: 'ui/notifications/tool-result',
+      params: { content: [{ type: 'text', text: 'ok' }], structuredContent: payload },
+    }, '*');
+  }, minimal);
+  await page.waitForTimeout(700);
+
+  const emptyState = await frame.evaluate(() => {
+    const text = document.body.innerText;
+    return {
+      hasBadToken: /NaN|undefined|\[object/.test(text),
+      statsEmpty: (document.getElementById('stats-body') || {}).innerText || '',
+      traceEmpty: (document.getElementById('trace-list') || {}).innerText || '',
+      agentsEmpty: (document.getElementById('agents-list') || {}).innerText || '',
+      quotaCap: (document.getElementById('c-quota-cap') || {}).textContent || '',
+    };
+  });
+
+  record('面板/空数据不出现 NaN/undefined', !emptyState.hasBadToken,
+    emptyState.hasBadToken ? '命中异常占位符' : '');
+
+  record('面板/空数据的统计页显示占位而不是空白',
+    emptyState.statsEmpty.includes('暂无数据'), emptyState.statsEmpty.slice(0, 30));
+
+  record('面板/空数据的轨迹页显示占位',
+    emptyState.traceEmpty.includes('没有匹配'), emptyState.traceEmpty.slice(0, 30));
+
+  record('面板/空数据的代理页显示占位',
+    emptyState.agentsEmpty.includes('没有子代理'), emptyState.agentsEmpty.slice(0, 30));
+
+  // 完全没数据时说明是「未取到」；服务端标记 unavailable 时才是「新对话，稍后才统计」
+  record('面板/空数据的额度说明有明确原因',
+    /新对话|未取到/.test(emptyState.quotaCap), emptyState.quotaCap.slice(0, 30));
+
+  // ---------- 控件弱断言：点击有反应且不报错 ----------
+  const controlErrorsBefore = errors.length;
+  const controls = await frame.evaluate(() => {
+    const out = [];
+    for (const id of ['opt-total', 'opt-events', 'opt-delta', 'opt-fold']) {
+      const el = document.getElementById(id);
+      if (!el) { out.push({ id, exists: false }); continue; }
+      const before = el.checked;
+      el.click();
+      out.push({ id, exists: true, toggled: el.checked !== before });
+    }
+    const cum = document.querySelector('button[data-mode="cum"]');
+    if (cum) cum.click();
+    const latest = document.querySelector('button[data-mode="latest"]');
+    if (latest) latest.click();
+    return out;
+  });
+  await page.waitForTimeout(300);
+
+  record('面板/四个复选框都能切换',
+    controls.every((c) => c.exists && c.toggled), JSON.stringify(controls));
+  record('面板/点击控件不产生脚本错误', errors.length === controlErrorsBefore,
+    errors.slice(controlErrorsBefore, controlErrorsBefore + 2).join(' | '));
+
   record('面板/无脚本报错', errors.length === 0, errors.slice(0, 2).join(' | '));
 
   await browser.close();

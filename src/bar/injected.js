@@ -577,6 +577,9 @@
       if (left) left.style.display = 'none';
       if (dot) {
         dot.classList.remove('hide');
+        // 故障用橙色，单纯"没有数据"用灰色——两者不该长得一样
+        const fault = ['no-anchor', 'error', 'no-thread'].includes(state);
+        dot.classList.toggle('bad', fault);
         const why = (data && data.health && (data.health.message || data.health.state)) || '暂无数据';
         dot.title = '底栏异常：' + why;
       }

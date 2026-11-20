@@ -484,6 +484,11 @@ Check '会话判定：新对话不得显示旧会话' {
     $true
   }
 
+Check '降级链路：锚点消失可见降级、恢复后回正' {
+  & $node (Join-Path $verify 'injector-degrade.js') $installed
+  $LASTEXITCODE -eq 0
+}
+
 Check '底栏跟随面板动画（偏差 < 2px）' {
   & $node (Join-Path $verify 'bar-follow.js')
   $LASTEXITCODE -eq 0
@@ -514,6 +519,31 @@ Check 'verify/test_server.py' {
 Check 'README 参数与代码一致' {
   & $py (Join-Path $verify 'test-docs.py')
   $LASTEXITCODE -eq 0
+}
+
+Check '发布包内容：模板占位符保留、无本机路径' {
+  $zip = Get-ChildItem (Join-Path $root 'dist-package') -Filter '*.zip' -ErrorAction SilentlyContinue |
+    Sort-Object LastWriteTime -Descending | Select-Object -First 1
+  if (-not $zip) { Write-Host '        -> 没有发布包，先跑 build.ps1'; return $false }
+  $tmp = Join-Path $env:TEMP ('dsh-zipcheck-' + [guid]::NewGuid().ToString('N').Substring(0, 6))
+  try {
+    Expand-Archive -Path $zip.FullName -DestinationPath $tmp -Force
+    $mcp = Join-Path $tmp 'plugin-market\plugins\session-dashboard\.mcp.json'
+    $inj = Join-Path $tmp 'bar\injector.js'
+    if (-not (Test-Path $mcp) -or -not (Test-Path $inj)) {
+      Write-Host '        -> 包内缺少 .mcp.json 或 injector.js'
+      return $false
+    }
+    $mcpText = Get-Content $mcp -Raw -Encoding UTF8
+    $injText = Get-Content $inj -Raw -Encoding UTF8
+    $okTemplate = ($mcpText -match '\{\{python\}\}') -and ($mcpText -match '\{\{server\}\}') -and ($injText -match '\{\{python\}\}')
+    $noLocal = ($mcpText -notmatch 'C:\\Users') -and ($injText -notmatch 'C:\\Users')
+    if (-not $okTemplate) { Write-Host '        -> 模板占位符缺失' }
+    if (-not $noLocal) { Write-Host '        -> 包里含本机绝对路径' }
+    $okTemplate -and $noLocal
+  } finally {
+    Remove-Item $tmp -Recurse -Force -ErrorAction SilentlyContinue
+  }
 }
 
 Section 'H. 安装器'

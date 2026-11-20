@@ -400,7 +400,9 @@ async function openDashboardTab(browser, page) {
       // 连续多次都读不到，才认为确实是新对话。
       // reason 已由 decideThread 区分了"新对话"和"窗口在后台"；
       // 有会话时下面的 data.ok 分支会把状态推回 ok。
-      if (resolved.reason === 'empty') setHealth('empty', '');
+      // 只有"锚点齐全"时才把空会话当成正常状态；
+      // 锚点缺失是故障，不能被"看起来像空会话"覆盖掉。
+      if (resolved.reason === 'empty' && missing.length === 0) setHealth('empty', '');
       if (thread) {
         data = await metrics.request(thread).catch((error) => {
           log('metrics request failed', error.message);
