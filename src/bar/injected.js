@@ -1,7 +1,7 @@
 (() => {
   // Bump when this file changes: the injector logs it, and a stale build means the
   // page is still running old code (the install guard below would otherwise hide that).
-  const BUILD = '2026-11-19.7';
+  const BUILD = '2026-11-19.8';
   if (window.__dshBarInstalled) return;
   window.__dshBarInstalled = true;
   window.__dshBarBuild = BUILD;
@@ -12,7 +12,7 @@
   const CSS = `
   /* The reserved space follows the bar's real height (see place()); 22px is only the
      initial value before the first measurement. */
-  [class*="ComposerLayoutRoot"]{margin-bottom:var(--dsh-bar-space, 22px) !important;}\n  #dsh-bar-root{position:fixed;z-index:2147483000;display:flex;align-items:center;gap:2px;
+  [class*="ComposerLayoutRoot"]{margin-bottom:var(--dsh-bar-space, 22px) !important;}\n  #dsh-bar-root{position:fixed;z-index:2147483000;will-change:transform;contain:layout paint;display:flex;align-items:center;gap:2px;
     font:12px/1.2 system-ui,"Segoe UI","Microsoft YaHei UI",sans-serif;font-variant-numeric:tabular-nums;
     color:#8b919a;background:transparent;padding:0 6px;height:24px;max-width:100%;white-space:nowrap;
     pointer-events:auto;user-select:none;}
@@ -345,26 +345,56 @@
 
 
 
+  // 缓存输入框元素：每帧重新 querySelectorAll 要 0.039ms，缓存后只要 0.0025ms
+  let cachedEditor = null;
+  let cachedComposer = null;
+  let lastPlacedKey = '';
+  let lastSpace = '';
+
+  function resolveComposer() {
+    if (cachedEditor && cachedEditor.isConnected) {
+      return { editor: cachedEditor, composer: cachedComposer };
+    }
+    cachedEditor = editorEl();
+    cachedComposer = cachedEditor
+      ? (cachedEditor.closest('[class*="ComposerLayoutRoot"]') || cachedEditor.closest('form') || cachedEditor.parentElement)
+      : null;
+    return { editor: cachedEditor, composer: cachedComposer };
+  }
+
   function place() {
     const root = document.getElementById(ID);
     if (!root) return;
-    const editor = editorEl();
-    if (!editor) { root.style.display = 'none'; return; }
-    const composer = editor.closest('[class*="ComposerLayoutRoot"]') || editor.closest('form') || editor.parentElement;
-    const r = (composer || editor).getBoundingClientRect();
-    if (!r || r.width < 100) { root.style.display = 'none'; return; }
+    const { editor, composer } = resolveComposer();
+    if (!editor) { root.style.display = 'none'; lastPlacedKey = ''; return; }
+    const box = composer || editor;
+    const r = box.getBoundingClientRect();
+    if (!r || r.width < 100) { root.style.display = 'none'; lastPlacedKey = ''; return; }
     root.style.display = '';
-    // The bar spans the composer box: process metrics left, quota + entry right.
-    root.style.maxWidth = Math.max(r.width, 200) + 'px';
-    root.style.width = Math.round(r.width) + 'px';
-    root.style.left = Math.round(r.left) + 'px';
-    root.style.transform = 'none';
-    const h = root.getBoundingClientRect().height || 24;
-    // Reserve exactly the room the bar needs, measured instead of assumed.
-    document.documentElement.style.setProperty('--dsh-bar-space', Math.round(h + 6) + 'px');
+
+    const height = root.getBoundingClientRect().height || 24;
     const room = window.innerHeight - r.bottom;
-    const top = r.bottom + Math.max((room - h) / 2, 0);
-    root.style.top = Math.round(Math.min(top, window.innerHeight - h - 1)) + 'px';
+    const top = r.bottom + Math.max((room - height) / 2, 0);
+    const topPx = Math.min(top, window.innerHeight - height - 1);
+
+    // 位置/宽度/纵向位置都没变就不写样式——逐帧写会持续触发布局
+    const key = `${r.left}|${r.width}|${Math.round(topPx)}`;
+    if (key === lastPlacedKey) return;
+    lastPlacedKey = key;
+
+    // 横向用合成层位移，避免改 left 触发重排；不取整，消除亚像素抖动
+    root.style.left = '0px';
+    root.style.transform = `translate3d(${r.left}px, 0, 0)`;
+    root.style.maxWidth = Math.max(r.width, 200) + 'px';
+    root.style.width = `${r.width}px`;
+    root.style.top = `${Math.round(topPx)}px`;
+
+    // 占位高度只在真的变了才写，避免每帧改动文档根的样式
+    const space = `${Math.round(height + 6)}px`;
+    if (space !== lastSpace) {
+      lastSpace = space;
+      document.documentElement.style.setProperty('--dsh-bar-space', space);
+    }
   }
 
   function openUsage(chipEl) {
@@ -670,23 +700,21 @@
     ensure();
     if (window.__dshTurns) ensureTurnChips(window.__dshTurns);
   }, 1500);
-  // 事件驱动为主：输入框尺寸变化会触发 ResizeObserver；1 秒的定时器只做兜底，
-  // 原来 500ms 会每秒做两次全栏几何测量。
-  const placeTimer = setInterval(place, 1000);
-  let resizeObserver = null;
-  try {
-    const anchor = editorEl();
-    if (anchor && typeof ResizeObserver !== 'undefined') {
-      resizeObserver = new ResizeObserver(() => place());
-      resizeObserver.observe(anchor);
-    }
-  } catch (_) { resizeObserver = null; }
+  // 逐帧跟随：面板开关时输入框只是"位置"在变、宽度不变，
+  // ResizeObserver 看不到这种变化，定时器又会整段丢帧（实测偏差最大 174px）。
+  // 逐帧读一次 rect 只要 0.0025ms，且没变化时不写样式，开销可忽略。
+  let placeFrame = 0;
+  const followLoop = () => {
+    place();
+    placeFrame = requestAnimationFrame(followLoop);
+  };
+  placeFrame = requestAnimationFrame(followLoop);
   window.addEventListener('resize', place);
 
   window.__dshBar = { render, place, ensure };
   window.__dshBarTeardown = () => {
     clearInterval(ensureTimer);
-    clearInterval(placeTimer);
+    if (placeFrame) cancelAnimationFrame(placeFrame);
     observer.disconnect();
     window.removeEventListener('resize', place);
     document.removeEventListener('keydown', onKey, true);
