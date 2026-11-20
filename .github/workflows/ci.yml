@@ -59,7 +59,10 @@ jobs:
             $nonAscii = @($bytes | Where-Object { $_ -gt 0x7F }).Count -gt 0
             $errs = $null
             [System.Management.Automation.Language.Parser]::ParseFile($f.FullName, [ref]$null, [ref]$errs) | Out-Null
-            if ($errs.Count -gt 0) { $bad += "$($f.Name): 语法错误" }
-            elseif ($nonAscii -and -not $hasBom) { $bad += "$($f.Name): 含中文但缺 BOM" }
+            # Keep these messages ASCII: GitHub runs inline scripts with powershell.exe
+            # which reads the temp file in the system ANSI codepage, so non-ASCII here
+            # turns into mojibake and breaks parsing.
+            if ($errs.Count -gt 0) { $bad += "$($f.Name): parse error" }
+            elseif ($nonAscii -and -not $hasBom) { $bad += "$($f.Name): non-ASCII without BOM" }
           }
-          if ($bad.Count -gt 0) { $bad | ForEach-Object { Write-Host $_ }; throw 'PowerShell 检查未通过' }
+          if ($bad.Count -gt 0) { $bad | ForEach-Object { Write-Host $_ }; throw 'PowerShell checks failed' }
