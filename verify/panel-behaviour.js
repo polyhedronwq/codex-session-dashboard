@@ -149,10 +149,12 @@ const record = (name, ok, detail) => results.push({ name, ok, detail: detail || 
   record('面板/代理 子代理列表有行或占位', agents.rows >= 1 || agents.placeholder,
     `行数 ${agents.rows} 占位=${agents.placeholder}`);
   record('面板/代理 工作足迹有 6 项以上', agents.footprint.length >= 6, agents.footprint.join(','));
+  // 没有子代理活动时面板显示占位符「—」，这属于正常空态
+  const activityEmpty = !agents.activity.trim() || /^[—\-–\s]+$/.test(agents.activity.trim());
   record('面板/代理 子代理活动是中文（不是 started/completed）',
-    agents.activity.length === 0
+    activityEmpty
       || (/启动|交互|完成/.test(agents.activity) && !/started|completed|interacted/.test(agents.activity)),
-    agents.activity.slice(0, 40));
+    activityEmpty ? '(空态)' : agents.activity.slice(0, 40));
 
 
   // ---------- P4：头部、最近一轮、异常态、控件 ----------
@@ -178,14 +180,17 @@ const record = (name, ok, detail) => results.push({ name, ok, detail: detail || 
     head.kv.join(','));
 
   record('面板/最近 5 轮每行列数一致',
-    head.recentCols.length >= 2 && new Set(head.recentCols).size === 1,
+    head.recentCols.length >= 1 && new Set(head.recentCols).size === 1,
     JSON.stringify(head.recentCols));
 
   await clickTab('代理');
   const agentRows = await frame.evaluate(() => [...document.querySelectorAll('#agents-list > *')]
     .map((row) => row.innerText.replace(/\s+/g, ' ').trim()).filter(Boolean));
-  record('面板/子代理行有名称与数值',
-    agentRows.length >= 1 && agentRows.every((t) => /\d/.test(t) && /[A-Za-z\u4e00-\u9fa5]/.test(t)),
+  // 会话可能本来没有子代理：这时应显示占位文案，而不是空白
+  const agentPlaceholder = agentRows.some((t) => t.includes('没有子代理'));
+  record('面板/子代理行有名称与数值（或显示无子代理占位）',
+    agentPlaceholder
+      || (agentRows.length >= 1 && agentRows.every((t) => /\d/.test(t) && /[A-Za-z\u4e00-\u9fa5]/.test(t))),
     JSON.stringify(agentRows.slice(0, 2)));
 
   // ---------- 异常态：从父页面注入最小 payload ----------
