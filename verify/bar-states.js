@@ -131,7 +131,34 @@ FAKE_NO_VALUE.summary.quota = { api: { weekly_percent: null, five_hour_percent: 
     !!sizes.dashIcon && sizes.dashIcon.w === 16 && sizes.dashIcon.h === 16,
     JSON.stringify(sizes.dashIcon));
 
+  // 三个弹窗必须真的能弹出来，而且没有被父级的裁剪（contain/clip/overflow）切掉。
+  // 之前给底栏加 contain:paint 后弹窗全部消失，没有任何检查发现。
+  const popovers = await page.evaluate(() => {
+    const root = document.getElementById('dsh-bar-root');
+    const items = [...root.querySelectorAll('.dsh-item')];
+    const out = [];
+    for (const item of items) {
+      item.click();
+      const pop = root.querySelector('.dsh-pop.show');
+      if (!pop) { out.push({ ok: false, why: '没有打开' }); continue; }
+      const rect = pop.getBoundingClientRect();
+      const x = Math.round(rect.x + rect.width / 2);
+      const y = Math.round(rect.y + Math.min(20, rect.height / 2));
+      const hit = document.elementFromPoint(x, y);
+      out.push({
+        ok: !!(hit && pop.contains(hit)),
+        why: hit && pop.contains(hit) ? '' : '被裁剪或不可命中',
+        size: Math.round(rect.width) + 'x' + Math.round(rect.height),
+      });
+      item.click();          // 关掉，测下一个
+    }
+    return out;
+  });
+  record('底栏/三个弹窗能打开且未被裁剪',
+    popovers.length === 3 && popovers.every((p) => p.ok), JSON.stringify(popovers));
+
   report();
+
 
 
 

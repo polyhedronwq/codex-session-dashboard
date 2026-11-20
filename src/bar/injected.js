@@ -12,7 +12,7 @@
   const CSS = `
   /* The reserved space follows the bar's real height (see place()); 22px is only the
      initial value before the first measurement. */
-  [class*="ComposerLayoutRoot"]{margin-bottom:var(--dsh-bar-space, 22px) !important;}\n  #dsh-bar-root{position:fixed;z-index:2147483000;will-change:transform;contain:layout paint;display:flex;align-items:center;gap:2px;
+  [class*="ComposerLayoutRoot"]{margin-bottom:var(--dsh-bar-space, 22px) !important;}\n  #dsh-bar-root{position:fixed;z-index:2147483000;will-change:transform;display:flex;align-items:center;gap:2px;
     font:12px/1.2 system-ui,"Segoe UI","Microsoft YaHei UI",sans-serif;font-variant-numeric:tabular-nums;
     color:#8b919a;background:transparent;padding:0 6px;height:24px;max-width:100%;white-space:nowrap;
     pointer-events:auto;user-select:none;}
