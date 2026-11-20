@@ -379,6 +379,11 @@ if ($harnessOk) {
 }
 
 # ============================================================ F. 底栏
+  Check '面板行为（控件/内容/交互）' {
+    & $node (Join-Path $verify 'panel-behaviour.js') $probe
+    $LASTEXITCODE -eq 0
+  }
+
 Section 'F. 底栏三态'
 
 $cdpUp = $false
