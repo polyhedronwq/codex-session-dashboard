@@ -272,6 +272,42 @@ const record = (name, ok, detail) => results.push({ name, ok, detail: detail || 
   record('面板/点击控件不产生脚本错误', errors.length === controlErrorsBefore,
     errors.slice(controlErrorsBefore, controlErrorsBefore + 2).join(' | '));
 
+  // ---------- 视觉：深浅对比度、窄窗口不溢出（只读测量，不改数据） ----------
+  const contrast = await frame.evaluate(async () => {
+    const lum = (color) => {
+      const m = color.match(/\d+(\.\d+)?/g);
+      if (!m) return null;
+      const [r, g, b] = m.slice(0, 3).map(Number);
+      return 0.2126 * r + 0.7152 * g + 0.0722 * b;
+    };
+    const measure = () => {
+      const bodyBg = lum(getComputedStyle(document.body).backgroundColor) || 0;
+      const sample = document.querySelector('.card .num') || document.querySelector('.card') || document.body;
+      const fg = lum(getComputedStyle(sample).color) || 0;
+      return Math.abs(fg - bodyBg);
+    };
+    document.body.dataset.theme = 'dark';
+    await new Promise((r) => setTimeout(r, 200));
+    const dark = measure();
+    document.body.dataset.theme = 'light';
+    await new Promise((r) => setTimeout(r, 200));
+    return { dark, light: measure() };
+  });
+  record('面板/深浅主题对比度足够',
+    contrast.dark >= 90 && contrast.light >= 90,
+    `dark=${Math.round(contrast.dark)} light=${Math.round(contrast.light)}`);
+
+  await page.setViewportSize({ width: 640, height: 800 });
+  await page.waitForTimeout(700);
+  const narrow = await frame.evaluate(() => ({
+    overflow: document.documentElement.scrollWidth - window.innerWidth,
+    cards: document.querySelectorAll('.card').length,
+  }));
+  record('面板/窄窗口（640px）不出现横向溢出',
+    narrow.overflow <= 2 && narrow.cards >= 6, JSON.stringify(narrow));
+  await page.setViewportSize({ width: 1280, height: 900 });
+  await page.waitForTimeout(400);
+
   record('面板/无脚本报错', errors.length === 0, errors.slice(0, 2).join(' | '));
 
   await browser.close();
