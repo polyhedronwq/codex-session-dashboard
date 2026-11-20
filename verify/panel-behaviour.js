@@ -138,16 +138,20 @@ const record = (name, ok, detail) => results.push({ name, ok, detail: detail || 
   const agents = await frame.evaluate(() => ({
     rows: document.querySelectorAll('#agents-list > *').length,
     footprint: [...document.querySelectorAll('#footprint-kv dt')].map((d) => d.textContent.trim()),
+    placeholder: (document.getElementById('agents-list') || {}).innerText.includes('没有子代理'),
     activity: (() => {
       const dt = [...document.querySelectorAll('#footprint-kv dt')].find((d) => d.textContent.includes('子代理活动'));
       return dt ? (dt.nextElementSibling || {}).textContent || '' : '';
     })(),
   }));
 
-  record('面板/代理 子代理列表有行', agents.rows >= 1, `行数 ${agents.rows}`);
+  // 会话可能本来就没有子代理：此时应显示占位文案，而不是空白
+  record('面板/代理 子代理列表有行或占位', agents.rows >= 1 || agents.placeholder,
+    `行数 ${agents.rows} 占位=${agents.placeholder}`);
   record('面板/代理 工作足迹有 6 项以上', agents.footprint.length >= 6, agents.footprint.join(','));
   record('面板/代理 子代理活动是中文（不是 started/completed）',
-    /启动|交互|完成/.test(agents.activity) && !/started|completed|interacted/.test(agents.activity),
+    agents.activity.length === 0
+      || (/启动|交互|完成/.test(agents.activity) && !/started|completed|interacted/.test(agents.activity)),
     agents.activity.slice(0, 40));
 
 
