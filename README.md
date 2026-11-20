@@ -1,5 +1,8 @@
 # Codex 会话仪表盘
 
+![CI](https://github.com/polyhedronwq/codex-session-dashboard/actions/workflows/ci.yml/badge.svg)
+
+
 给 Codex 桌面版加一个**会话仪表盘面板**和一条**输入框下方的状态栏**：看轮次与步数、token 消耗、缓存命中、上下文占用，以及**这条对话占用了多少周额度**。
 
 > **非官方项目**：与 OpenAI 无关联，未获其认可或支持。
