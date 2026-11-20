@@ -169,10 +169,10 @@
 | `launch.vbs`（带端口启动 Codex） | ⚠️ 仅被安装器调用 |
 | `injector-only.vbs` | ⚠️ 同上 |
 | `start-bar.cmd` | ❌ |
-| `stop-bar.cmd` / `stop-bar.ps1` | ❌ |
-| `stop-watch.cmd` / `watch-windows.ps1` | ❌ |
-| `switch-icon.cmd` / `switch-icon.ps1` | ❌（曾被误删过） |
-| `diagnose.cmd` / `diagnose.ps1` | ❌ |
+| `stop-bar.cmd` / `stop-bar.ps1` | ✅（-Full） |
+| `stop-watch.cmd` / `watch-windows.ps1` | ✅ |
+| `switch-icon.cmd` / `switch-icon.ps1` | ✅ 黑白往返 |
+| `diagnose.cmd` / `diagnose.ps1` | ✅ 能生成报告 |
 
 ## 七、安装器 / 构建 / 文档
 
@@ -180,15 +180,15 @@
 | --- | --- |
 | `install.ps1 -CheckOnly` | ✅ |
 | 全新安装（从 zip） | ⚠️ 手动验过，未进套件 |
-| 覆盖升级（连装两次） | ❌ |
+| 覆盖升级（连装两次） | ✅（-Full） |
 | Codex 未运行时安装 | ❌ |
 | 缺 node / 缺 python 的提示路径 | ❌ |
 | 已有 config.toml 内容不被破坏 | ⚠️ 只测了市场源 |
 | 快捷方式创建 | ❌ |
-| `uninstall.ps1` 完整执行 + 残留 = 0 | ⚠️ 只测语法 |
+| `uninstall.ps1` 完整执行 + 残留 = 0 | ✅（-Full） |
 | `render-paths.ps1` 渲染正确性 | ⚠️ 间接 |
 | `reload-page.js` | ❌ |
-| `build.ps1 -NoMirror` | ❌ |
+| `build.ps1 -NoMirror` | ✅ 内容标记验证 |
 | zip 包内容与模板占位符 | ⚠️ 手动验过 |
 | README 参数与代码一致 | ✅ |
 | README 里的命令能跑通 | ❌ |
@@ -204,9 +204,9 @@
 | 服务端方法/分支 | 15 | 14 | 1 |
 | 解析事件类型 | 8 | 7 | 1 |
 | 注入器行为 | 7 | 2 | 5 |
-| 用户脚本 | 9 | 0 | 9 |
-| 安装/构建/文档 | 14 | 2 | 12 |
-| **合计** | **121** | **61** | **60** |
+| 用户脚本 | 9 | 5 | 4 |
+| 安装/构建/文档 | 14 | 6 | 8 |
+| **合计** | **121** | **68** | **53** |
 
 ## 九、建议顺序
 
@@ -272,3 +272,28 @@
 
 剩余缺口：注入器的三地址回退、no-anchor 状态、文件监听、注入失败重试；
 代理图细节、面板头部元素、异常态文案、9 个用户脚本、升级/卸载路径、构建 -NoMirror。
+
+## 十三、P3 完成记录（2026-11-20）
+
+新增 `verify/scripts-smoke.ps1`：
+
+默认档（4 条，不打断使用）：
+- `diagnose.ps1` 能生成报告
+- `switch-icon.ps1` 黑白往返（并还原）
+- `watch-windows.ps1` 起得来、`stop-watch.cmd` 停得掉
+- `build.ps1 -NoMirror` 只出 dist，不改安装目录
+
+`-Full` 档（额外 3 条，破坏性）：
+- `stop-bar.ps1` 停止注入器并能重新拉起
+- 连装两次不重复注册（市场段/插件段各 1 次）
+- 卸载后无残留、重装后恢复
+
+故障注入验证（4 类，全部命中）：诊断脚本不产出、图标切换写死白色、
+监视器不写 pid、`-NoMirror` 失效 → 对应断言全部 FAIL。
+
+过程中发现并修掉两个真实问题：
+
+1. **`Copy-Item` 保留时间戳**，导致原来用 mtime 判断 `-NoMirror` 的断言根本测不出镜像 →
+   改成"在安装目录写内容标记，看是否被覆盖"。
+2. **卸载后留下空目录**，但自检仍报"无残留" → 卸载改为删除空目录，
+   同时给冒烟脚本加"未安装"前置提示（避免半安装状态下测出莫名其妙的失败）。

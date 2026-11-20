@@ -89,7 +89,16 @@ if ($KeepFiles) {
   foreach ($f in $restoreFiles) { Copy-Item $f.FullName (Join-Path $barDir $f.Name) -Force }
   if ($restoreFiles.Count -gt 0) { Say "已还原安装前的 $($restoreFiles.Count) 个文件" }
   Remove-Item $manifestPath -Force -ErrorAction SilentlyContinue
-  Say "底栏目录已清理: $barDir"
+  # 清完文件后把空目录也删掉：自检说"无残留"，用户看到还在就更困惑
+  if (Test-Path $barDir) {
+    $left = @(Get-ChildItem $barDir -Force -ErrorAction SilentlyContinue)
+    if ($left.Count -eq 0) {
+      Remove-Item $barDir -Force -ErrorAction SilentlyContinue
+      Say "底栏目录已删除: $barDir"
+    } else {
+      Say "底栏目录已清理（保留 $($left.Count) 项运行记录）: $barDir"
+    }
+  }
 }
 
 Step '5/5 残留自检'

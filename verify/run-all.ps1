@@ -10,7 +10,8 @@
 param(
   [switch]$SkipBar,
   [switch]$Snapshot,
-  [switch]$KeepHarness
+  [switch]$KeepHarness,
+  [switch]$Full
 )
 
 $ErrorActionPreference = 'Stop'
@@ -565,6 +566,16 @@ Check '截图集已生成（供人工复核）' {
   $LASTEXITCODE -eq 0
 }
 Write-Host "        截图目录: $shotsDir"
+
+# ============================================================ J. 用户脚本
+Section 'J. 用户脚本'
+
+Check '用户脚本冒烟（诊断/图标/监视器/-NoMirror）' {
+  $args = @()
+  if ($Full) { $args += '-Full' }
+  & powershell -NoProfile -ExecutionPolicy Bypass -File (Join-Path $verify 'scripts-smoke.ps1') @args
+  $LASTEXITCODE -eq 0
+}
 
 # ============================================================ 快照
 if ($Snapshot) {
