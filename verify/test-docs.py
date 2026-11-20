@@ -16,7 +16,7 @@ CHECKS = [
     ('4000 ms', 'REFRESH_MS = 4000', 'src/shared/panel.html'),
     ('30000 ms', 'IDLE_MS = 30000', 'src/shared/panel.html'),
     ('1500 ms', '}, 1500)', 'src/bar/injected.js'),
-    ('1000 ms', 'setInterval(place, 1000)', 'src/bar/injected.js'),
+    ('逐帧（rAF）', 'requestAnimationFrame(followLoop)', 'src/bar/injected.js'),
     ('3600 s', '_QUOTA_TTL_OK = 3600.0', 'src/shared/server.py'),
     ('7200 s', '_QUOTA_TTL_MISSING = 7200.0', 'src/shared/server.py'),
     ('6 s', '_QUOTA_TIMEOUT = 6.0', 'src/shared/server.py'),
@@ -41,8 +41,22 @@ def main():
         print('  ✗ ' + item)
     if not problems:
         print(f'  文档与代码一致：{len(CHECKS)} 项参数')
-    return 1 if problems else 0
+    return 1 if (problems or missing) else 0
 
+
+
+
+# README 里提到的入口文件必须真实存在（文档和仓库脱节时立刻发现）
+REFERENCED = [
+    'build.ps1', 'verify/run-all.ps1', 'verify/test_server.py',
+    'verify/test-resolver.js', 'verify/perf-baseline.ps1',
+    'tools/install.ps1', 'tools/uninstall.ps1',
+]
+missing = [rel for rel in REFERENCED if not (ROOT / rel).is_file()]
+if missing:
+    print('  ✗ README 引用了不存在的文件: ' + ', '.join(missing))
+else:
+    print(f'  README 引用的脚本都存在：{len(REFERENCED)} 个')
 
 if __name__ == '__main__':
     sys.exit(main())

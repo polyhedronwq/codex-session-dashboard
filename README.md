@@ -150,7 +150,7 @@ python verify/test_server.py         # 解析层单元测试
 | 面板刷新（运行中） | **4000 ms** | `src/shared/panel.html` `REFRESH_MS` | 面板可见时才轮询，切到后台自动暂停 |
 | 面板刷新（静止） | **30000 ms** | `IDLE_MS` | 静止时数据本来就不变，没必要每分钟往返 15 次 |
 | 底栏自检 | **1500 ms** | `src/bar/injected.js` | 页面结构变化后把底栏补回来（配合 MutationObserver） |
-| 底栏定位 | **1000 ms** + `ResizeObserver` | `injected.js` `placeTimer` | 主要靠输入框尺寸变化事件驱动，定时器只做兜底 |
+| 底栏跟随 | **逐帧（rAF）** | `injected.js` `followLoop` | 面板开关时输入框只移动不改宽，`ResizeObserver` 看不到；逐帧读一次 rect 约 0.0025 ms，没变化就不写样式 |
 
 ### 缓存与超时
 

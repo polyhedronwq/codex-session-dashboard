@@ -112,6 +112,19 @@ Test-Item 'build.ps1 -NoMirror 只出 dist，不改安装目录' {
   }
 }
 
+Test-Item '快捷方式内容正确（wscript + launch.vbs + 图标）' {
+  if (-not (Test-Path $shortcut)) { return $false }
+  $ws = New-Object -ComObject WScript.Shell
+  $sc = $ws.CreateShortcut($shortcut)
+  $targetOk = $sc.TargetPath -match 'wscript\.exe$'
+  $argsOk = $sc.Arguments -match 'launch\.vbs'
+  $iconOk = (Test-Path ($sc.IconLocation -replace ',\d+$', ''))
+  if (-not ($targetOk -and $argsOk -and $iconOk)) {
+    Write-Host "        -> target=$($sc.TargetPath) args=$($sc.Arguments) icon=$($sc.IconLocation)"
+  }
+  $targetOk -and $argsOk -and $iconOk
+}
+
 # ---------------------------------------------------------------- 破坏性检查
 if ($Full) {
   Test-Item 'stop-bar.ps1 停止注入器，随后能重新拉起' {
