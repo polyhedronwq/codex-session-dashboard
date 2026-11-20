@@ -124,16 +124,16 @@
 | tools/call | ✅ |
 | resources/list | ✅ |
 | resources/read | ✅ |
-| resources/templates/list | ❌ |
-| ping | ❌ |
-| 未知方法 → 报错而非崩溃 | ❌ |
+| resources/templates/list | ✅ |
+| ping | ✅ |
+| 未知方法 → 报错而非崩溃 | ✅ |
 
 ### payload 结果
 | 分支 | 现状 |
 | --- | --- |
 | ok | ✅ |
 | not_found（会话不存在） | ✅ |
-| rollout_missing（会话存在但无路径） | ❌ |
+| rollout_missing（会话存在但无路径） | ✅ |
 | 额度有值 / null / partial / unavailable | ⚠️ 只测了结构 |
 | 额度接口超时 → 回退 `—` | ❌ |
 | 缓存命中 / 过期 / 非法 key 不写入 | ⚠️ 只测了 TTL 常量 |
@@ -144,10 +144,10 @@
 | token_usage_record | ✅ |
 | event_msg/token_count | ✅ |
 | task_started / task_complete | ✅ |
-| turn_context（模型/强度变更） | ❌ |
-| world_state（AGENTS.md 规则） | ❌ |
+| turn_context（模型/强度变更） | ✅ |
+| world_state（AGENTS.md 规则） | ✅ |
 | response_item（消息/工具） | ❌ |
-| compacted（压缩次数） | ❌ |
+| compacted（压缩次数） | ✅ |
 | 半行 / 截断 / 损坏 JSONL | ✅ |
 
 ## 五、注入器（injector.js）
@@ -155,7 +155,7 @@
 | 行为 | 现状 |
 | --- | --- |
 | 三地址回退（127.0.0.1 / [::1] / localhost） | ❌ 无断言 |
-| 单实例锁 9224 | ❌ |
+| 单实例锁 9224 | ✅ |
 | 重注入（页面 reload 后） | ⚠️ 间接 |
 | health 四种状态 ok/empty/no-anchor/error | ✅ 部分（no-anchor 无断言） |
 | 文件监听事件驱动 + 2s 兜底 | ❌ |
@@ -201,12 +201,12 @@
 | 底栏行为 | 14 | 11 | 3 |
 | 面板结构 | 30 | 11 | 19 |
 | 面板交互 | 8 | 4 | 4 |
-| 服务端方法/分支 | 15 | 8 | 7 |
-| 解析事件类型 | 8 | 4 | 4 |
-| 注入器行为 | 7 | 1 | 6 |
+| 服务端方法/分支 | 15 | 14 | 1 |
+| 解析事件类型 | 8 | 7 | 1 |
+| 注入器行为 | 7 | 2 | 5 |
 | 用户脚本 | 9 | 0 | 9 |
 | 安装/构建/文档 | 14 | 2 | 12 |
-| **合计** | **121** | **48** | **73** |
+| **合计** | **121** | **61** | **60** |
 
 ## 九、建议顺序
 
@@ -254,3 +254,21 @@
 
 仍缺口（下一阶段）：`opt-events` / `opt-delta` / `opt-fold` / 累计模式、代理图条形与图例、
 代理间消息、改动文件链接、异常态文案、头部元素（标题/模型 chip/更新时间/刷新按钮）、最近一轮 kv。
+
+## 十二、P2 完成记录（2026-11-20）
+
+新增：
+- `verify/server-branches.py`（8 条）：initialize / ping / resources/templates/list / 未知方法 / 未知工具 / 资源 uri 不匹配 / 非法 JSON / 出错后仍能响应
+- `verify/test_server.py` +5 条：turn_context 设置变更、world_state 的 AGENTS.md、compacted 计数、rollout_missing、非法缓存 key 不写入
+- 套件新增「注入器单实例锁」检查
+
+故障注入验证（3 类，全部命中）：
+
+| 故障 | 失败断言 |
+| --- | --- |
+| ping 改为抛异常 | 服务端/ping 返回空结果 |
+| compacted 计数写成 +0 | test_compacted_increases_count |
+| 锁端口改为 0（锁失效） | 注入器进程数 1 → 2 |
+
+剩余缺口：注入器的三地址回退、no-anchor 状态、文件监听、注入失败重试；
+代理图细节、面板头部元素、异常态文案、9 个用户脚本、升级/卸载路径、构建 -NoMirror。

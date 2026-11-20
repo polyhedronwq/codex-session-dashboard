@@ -1,4 +1,4 @@
-﻿"""解析层单元测试：直接构造 rollout JSONL，验证统计口径。
+"""解析层单元测试：直接构造 rollout JSONL，验证统计口径。
 
     python verify\test_server.py
 """
@@ -201,6 +201,80 @@ class ParseTests(unittest.TestCase):
         )
         turns = SRV.build_turns(self.state)
         self.assertTrue(turns[0]['aborted'])
+
+class BranchTests(unittest.TestCase):
+    """P2：事件类型与失败分支。"""
+
+    def setUp(self):
+        self.tmp = tempfile.NamedTemporaryFile('w', suffix='.jsonl', delete=False, encoding='utf-8')
+        self.tmp.close()
+        self.path = pathlib.Path(self.tmp.name)
+        self.state = SRV.new_state()
+
+    def tearDown(self):
+        try:
+            self.path.unlink()
+        except OSError:
+            pass
+
+    def write(self, *lines):
+        self.path.write_text('\n'.join(lines) + '\n', encoding='utf-8')
+        SRV.read_appended(self.state, self.path)
+
+    def test_turn_context_records_settings_change(self):
+        first = rec('turn_context', {
+            'cwd': 'D:/w', 'model': 'gpt-6.2-astra', 'effort': 'low',
+            'approval_policy': 'on-request', 'sandbox_policy': {'type': 'workspace-write', 'network_access': False},
+        })
+        second = rec('turn_context', {
+            'cwd': 'D:/w', 'model': 'gpt-6.2-astra', 'effort': 'high',
+            'approval_policy': 'on-request', 'sandbox_policy': {'type': 'workspace-write', 'network_access': False},
+        })
+        self.write(first, second)
+        summary = SRV.build_summary(self.state, SRV.build_turns(self.state), 't')
+        changes = summary['settings_changes']
+        self.assertEqual(len(changes), 1)
+        self.assertEqual(changes[0]['changes'][0]['field'], 'effort')
+        self.assertEqual(changes[0]['before']['effort'], 'low')
+        self.assertEqual(changes[0]['after']['effort'], 'high')
+
+    def test_world_state_records_agents_md(self):
+        self.write(rec('world_state', {'state': {'agents_md': {'text': 'rules-here' * 10}}}))
+        summary = SRV.build_summary(self.state, SRV.build_turns(self.state), 't')
+        self.assertIsNotNone(summary['rules'])
+        self.assertEqual(summary['rules']['file'], 'AGENTS.md')
+        self.assertEqual(summary['rules']['chars'], 100)
+
+    def test_compacted_increases_count(self):
+        self.write(rec('compacted', {}), rec('compacted', {}))
+        summary = SRV.build_summary(self.state, SRV.build_turns(self.state), 't')
+        self.assertEqual(summary['compactions'], 2)
+
+    def test_rollout_missing_reason(self):
+        original = SRV.thread_row
+        SRV.thread_row = lambda tid: {'id': tid, 'title': 'x', 'model': 'm', 'path': None,
+                                      'updated_at': None, 'source': None}
+        try:
+            data = SRV.payload_for('00000000-0000-0000-0000-000000000000')
+            self.assertFalse(data['ok'])
+            self.assertEqual(data['reason'], 'rollout_missing')
+        finally:
+            SRV.thread_row = original
+
+    def test_invalid_cache_key_not_written(self):
+        cache_file = SRV._QUOTA_CACHE_FILE
+        backup = cache_file.read_text(encoding='utf-8') if cache_file.exists() else None
+        try:
+            SRV._quota_cache_write('t', {'weekly_percent': 1.0})
+            data = json.loads(cache_file.read_text(encoding='utf-8')) if cache_file.exists() else {}
+            self.assertNotIn('t', data, '非法 key 不应写入额度缓存')
+        finally:
+            if backup is None:
+                if cache_file.exists():
+                    cache_file.unlink()
+            else:
+                cache_file.write_text(backup, encoding='utf-8')
+
 
 
 if __name__ == '__main__':

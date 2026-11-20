@@ -310,6 +310,11 @@ Check '不存在的会话返回 not_found 且不抛异常' {
 }
 
 # ============================================================ D. 消费者契约
+Check '服务端协议分支（ping/模板/未知方法/非法 JSON）' {
+  & $py (Join-Path $verify 'server-branches.py') $installed
+  $LASTEXITCODE -eq 0
+}
+
 Section 'D. 消费者契约（按 Codex 的读取方式校验）'
 
 Check '安装目录: JSON/清单/MCP 握手' {
@@ -460,6 +465,23 @@ Check '会话判定：新对话不得显示旧会话' {
   & $node (Join-Path $verify 'test-resolver.js')
   $LASTEXITCODE -eq 0
 }
+
+  Check '注入器单实例锁（第二个实例应退出）' {
+    $before = @(Get-CimInstance Win32_Process -Filter "Name='node.exe'" |
+      Where-Object { $_.CommandLine -match 'injector\.js' }).Count
+    Start-Process -FilePath "$env:WINDIR\System32\wscript.exe" `
+      -ArgumentList '//nologo', (Join-Path $installed 'injector-only.vbs') -WindowStyle Hidden | Out-Null
+    Start-Sleep -Seconds 4
+    $after = @(Get-CimInstance Win32_Process -Filter "Name='node.exe'" |
+      Where-Object { $_.CommandLine -match 'injector\.js' }).Count
+    $log = Get-Content (Join-Path $installed 'bar.log') -Tail 25 -Encoding UTF8
+    $said = ($log -join "`n") -match 'another injector is already running'
+    if (-not ($before -eq 1 -and $after -eq 1 -and $said)) {
+      Write-Host "        -> before=$before after=$after 日志提示=$said"
+      return $false
+    }
+    $true
+  }
 
 Check '底栏跟随面板动画（偏差 < 2px）' {
   & $node (Join-Path $verify 'bar-follow.js')
