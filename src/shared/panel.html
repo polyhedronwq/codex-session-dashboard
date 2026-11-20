@@ -1218,10 +1218,16 @@
     // The host usually pushes the first result; only self-fetch when nothing arrives.
     setTimeout(() => { if (!state.data) getData({}); }, 600);
     // Keep the view live: poll a lightweight summary and refetch only what is expanded.
-    setInterval(() => {
-      if (document.hidden || !state.threadId) return;
-      getData({ lite: true, silent: true });
-    }, REFRESH_MS);
+    // 自适应刷新：正在跑的一轮用 4 秒，静止后降到 30 秒。
+// 原来固定 4 秒，每分钟 15 次 MCP 往返，而静止时数据根本不变。
+const ACTIVE_MS = REFRESH_MS;        // 4000
+const IDLE_MS = 30000;
+const tick = () => {
+  if (!document.hidden && state.threadId) getData({ lite: true, silent: true });
+  const running = !!(state.data && state.data.summary && state.data.summary.running);
+  setTimeout(tick, running ? ACTIVE_MS : IDLE_MS);
+};
+setTimeout(tick, ACTIVE_MS);
     document.addEventListener('visibilitychange', () => {
       if (!document.hidden && state.threadId) getData({ lite: true, silent: true });
     });

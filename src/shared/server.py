@@ -29,11 +29,10 @@ _QUOTA_CACHE = {}          # thread_id -> (timestamp, result), in-process
 # An on-disk cache keeps the whole machine down to one real request per TTL.
 _QUOTA_CACHE_FILE = pathlib.Path.home() / '.codex-bar' / 'quota-cache.json'
 _QUOTA_CACHE_KEEP = 20
-# The weekly percentage grows slowly (hundredths of a point per turn), so a short TTL buys
-# nothing. Threads the server has not attributed yet are retried even less often: measured
-# samples show "unavailable" is not a matter of waiting, and some never get a value.
-_QUOTA_TTL_OK = 900.0      # 15 min once we have a number
-_QUOTA_TTL_MISSING = 3600.0  # 60 min for threads with no attribution yet
+# 实测：服务端聚合几小时才动一次（7 条会话的 data_as_of 是同一个 134 分钟前的时间），
+# 15 分钟刷新拿回同一个数，纯浪费。未归属的会话更不会因为等就出现，所以拉得更长。
+_QUOTA_TTL_OK = 3600.0     # 60 min：服务端本身就没那么快更新
+_QUOTA_TTL_MISSING = 7200.0  # 120 min：未归属的会话短期不会突然有
 _QUOTA_TIMEOUT = 6.0
 
 
@@ -54,6 +53,11 @@ def _quota_cache_read():
 
 
 def _quota_cache_write(thread_id, result):
+    # 只写真实会话 id：以前测试用的假 id（如 't'）会污染共享缓存
+    try:
+        uuid.UUID(str(thread_id))
+    except (ValueError, AttributeError, TypeError):
+        return
     data = _quota_cache_read()
     data[thread_id] = {'ts': time.time(), 'result': result}
     if len(data) > _QUOTA_CACHE_KEEP:

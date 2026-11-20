@@ -382,10 +382,14 @@ if ($harnessOk) {
 Section 'F. 底栏三态'
 
 $cdpUp = $false
-try {
-  $null = Invoke-RestMethod 'http://localhost:9223/json/version' -TimeoutSec 2
-  $cdpUp = $true
-} catch { }
+# 显式双栈：localhost 在不同环境会先解析到 ::1 或 127.0.0.1，可能命不中
+foreach ($cdpProbe in @('http://127.0.0.1:9223', 'http://[::1]:9223')) {
+  try {
+    $null = Invoke-RestMethod "$cdpProbe/json/version" -TimeoutSec 2
+    $cdpUp = $true
+    break
+  } catch { }
+}
 
 if ($SkipBar) {
   Write-Host '  SKIP  按参数跳过（-SkipBar）'
@@ -435,8 +439,9 @@ if ($SkipBar) {
       Start-Sleep -Milliseconds 500
       if (Test-Path $h) {
         $j = Get-Content $h -Raw -Encoding UTF8 | ConvertFrom-Json
-        if ($j.state -eq 'ok') { return $true }
-        if ($j.state -eq 'empty') { return $false }   # 有会话却判成空 = 回归
+        # ok 和 empty 都说明注入器已经连上并做出了判断；
+        # 用户就停在新对话时 empty 是正确结果（"新对话不得显示旧会话"由另一条检查负责）。
+        if ($j.state -in @('ok', 'empty')) { return $true }
       }
     }
     $false
@@ -444,6 +449,19 @@ if ($SkipBar) {
 }
 
 # ============================================================ G. 单测
+Check '会话判定：新对话不得显示旧会话' {
+  # 这条对应的真实事故：兜底规则让新对话界面显示了别的会话的数据。
+  # 判定逻辑已抽成纯函数（src/bar/thread-resolver.js），这里跑它的单测。
+  & $node (Join-Path $verify 'test-resolver.js')
+  $LASTEXITCODE -eq 0
+}
+
+Check '运行中的判定结果与 health.json 一致' {
+  # 现场一致性：页面里实际判定出来的会话，必须和注入器记录的一样
+  & $node (Join-Path $verify 'resolver-live.js') $installed $node
+  $LASTEXITCODE -eq 0
+}
+
 Section 'G. 解析层单元测试'
 
 Check 'verify/test_server.py' {
@@ -460,6 +478,11 @@ Check 'verify/test_server.py' {
 }
 
 # ============================================================ H. 安装器
+Check 'README 参数与代码一致' {
+  & $py (Join-Path $verify 'test-docs.py')
+  $LASTEXITCODE -eq 0
+}
+
 Section 'H. 安装器'
 
 $installer = Join-Path $root 'share\install.ps1'
@@ -499,6 +522,13 @@ if (-not $cdpUp) {
 }
 
 Check '截图集已生成（供人工复核）' {
+  # 面板截图依赖 harness；E 段（或上一次运行的清理）可能没有留着，这里兜底重建
+  if (-not (Test-Path (Join-Path $probe 'panel-harness.html')) -and $newestThread) {
+    & $py (Join-Path $probe 'build_harness.py') --thread=$newestThread | Out-Null
+    & $py (Join-Path $probe 'build_harness.py') stats --thread=$newestThread | Out-Null
+    & $py (Join-Path $probe 'build_harness.py') trace --thread=$newestThread | Out-Null
+    & $py (Join-Path $probe 'build_harness.py') agents --thread=$newestThread | Out-Null
+  }
   & $node (Join-Path $verify 'screens.js') $shotsDir $probe
   $LASTEXITCODE -eq 0
 }

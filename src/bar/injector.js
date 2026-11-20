@@ -20,6 +20,8 @@ let ENDPOINT = ENDPOINTS[0];
 const PYTHON = process.env.DSH_BAR_PYTHON || '{{python}}';
 const LOG = path.join(HERE, 'bar.log');
 const INJECT_SRC = fs.readFileSync(path.join(HERE, 'injected.js'), 'utf8');
+// 会话判定逻辑单独成文件，便于单测（曾经因为兜底规则写错，显示成了别的会话的数据）
+const RESOLVER_SRC = fs.readFileSync(path.join(HERE, 'thread-resolver.js'), 'utf8');
 const REFRESH_MS = 1000;
 // 空闲时降频：没有新数据就 5 秒一探，避免空转
 const IDLE_REFRESH_MS = 5000;
@@ -168,48 +170,21 @@ const metrics = new Metrics();
 // ---------------------------------------------------------------- injection
 // NOTE: READ_THREAD is serialised and evaluated inside the page, so it cannot close over
 // anything defined out here — every helper it needs must live inside the function body.
-const READ_THREAD = () => {
-  const UUID_RE = /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i;
-  // 1) The conversation actually on screen. Message nodes carry the real thread UUID.
-  //    Codex keeps previously opened panes mounted, so several ids coexist here; only
-  //    the active pane's nodes are laid out, which is what separates them.
-  const scores = new Map();
-  for (const el of document.querySelectorAll('[data-response-annotation-conversation]')) {
-    const id = el.getAttribute('data-response-annotation-conversation') || '';
-    if (!UUID_RE.test(id)) continue;
-    const rect = el.getBoundingClientRect();
-    if (el.offsetParent === null || rect.width <= 0 || rect.height <= 0) continue;
-    scores.set(id, (scores.get(id) || 0) + 1);
-  }
-  let best = null;
-  for (const [id, score] of scores) {
-    if (!best || score > best.score) best = { id, score };
-  }
-  if (best) return best.id;
-
-  // 1b) 窗口在后台时布局尺寸全是 0，此时"可见性"无法判断；退回到出现次数最多的
-  //     合法 UUID——页面里挂着的会话副本都是同一个 id 时不会选错。
-  const byCount = new Map();
-  for (const el of document.querySelectorAll('[data-response-annotation-conversation]')) {
-    const id = el.getAttribute('data-response-annotation-conversation') || '';
-    if (!UUID_RE.test(id)) continue;
-    byCount.set(id, (byCount.get(id) || 0) + 1);
-  }
-  let mostSeen = null;
-  for (const [id, count] of byCount) {
-    if (!mostSeen || count > mostSeen.count) mostSeen = { id, count };
-  }
-  if (mostSeen) return mostSeen.id;
-
-  // 2) Fall back to the sidebar selection, but only when it holds a real UUID. A newly
-  //    created conversation keeps a "client-new-thread:..." placeholder there, which
-  //    never matches a row in the database, so trusting it hides the whole bar.
-  const el = document.querySelector('[data-app-action-sidebar-thread-selected="true"]')
-    || document.querySelector('[data-app-action-sidebar-thread-active="true"]');
-  if (!el) return null;
-  const raw = (el.getAttribute('data-app-action-sidebar-thread-id') || '').replace(/^local:/, '');
-  return UUID_RE.test(raw) ? raw : null;
-};
+// 在页面里收集节点可见性，再交给 decideThread 判定（判定逻辑有单测）
+async function resolveThreadInPage(page, lastThread) {
+  return page.evaluate(({ src, last }) => {
+    const factory = new Function(src + '; return decideThread;');
+    const decide = factory();
+    const nodes = [...document.querySelectorAll('[data-response-annotation-conversation]')].map((el) => {
+      const rect = el.getBoundingClientRect();
+      return {
+        id: el.getAttribute('data-response-annotation-conversation') || '',
+        visible: rect.width > 0 && rect.height > 0,
+      };
+    });
+    return decide({ nodes, visibilityState: document.visibilityState, lastThread: last });
+  }, { src: RESOLVER_SRC, last: lastThread || null });
+}
 
 async function injectInto(page) {
   try {
@@ -392,9 +367,11 @@ async function openDashboardTab(browser, page) {
 
   let stopped = false;
   let watchedPath = null;
+  let watcher = null;
   let lastThread = null;
   let lastReason = null;
   let lastSig = null;
+  let lastBusy = false;
   let emptyStreak = 0;
   let lastChangeAt = Date.now();
   const stop = () => { stopped = true; };
@@ -408,7 +385,8 @@ async function openDashboardTab(browser, page) {
       if (missing.length > 0) {
         setHealth('no-anchor', '缺少页面锚点: ' + missing.join('、'));
       }
-      const thread = await page.evaluate(READ_THREAD).catch(() => null);
+      const resolved = await resolveThreadInPage(page, lastThread).catch(() => ({ id: null, reason: 'unknown' }));
+      const thread = resolved.id;
       health.thread = thread || health.thread;
       // Log only when the resolved conversation changes, so the log stays short while still
       // answering "which conversation was the bar showing when it broke".
@@ -420,12 +398,9 @@ async function openDashboardTab(browser, page) {
       let data = { ok: false };
       // 读不到会话不立刻当成"空对话"：窗口切到后台时布局尺寸为 0，会误判。
       // 连续多次都读不到，才认为确实是新对话。
-      if (thread) {
-        emptyStreak = 0;
-      } else if (missing.length === 0) {
-        emptyStreak += 1;
-        if (emptyStreak >= 8) setHealth('empty', '');
-      }
+      // reason 已由 decideThread 区分了"新对话"和"窗口在后台"；
+      // 有会话时下面的 data.ok 分支会把状态推回 ok。
+      if (resolved.reason === 'empty') setHealth('empty', '');
       if (thread) {
         data = await metrics.request(thread).catch((error) => {
           log('metrics request failed', error.message);
@@ -442,9 +417,19 @@ async function openDashboardTab(browser, page) {
         }
         const file = data.ok && data.thread && data.thread.path;
         if (file && file !== watchedPath) {
-          if (watchedPath) fs.unwatchFile(watchedPath);
+          if (watchedPath) {
+            fs.unwatchFile(watchedPath);
+            if (watcher) { try { watcher.close(); } catch (_) { /* 已关闭 */ } }
+            watcher = null;
+          }
           watchedPath = file;
-          fs.watchFile(file, { interval: 200 }, () => kick());
+          // 事件驱动：有新行立刻唤醒。Windows 上 fs.watch 偶尔漏事件，
+          // 所以额外挂一个 2 秒的低频兜底轮询，而不是原来的 200ms。
+          try {
+            watcher = fs.watch(file, () => kick());
+            watcher.on('error', () => { watcher = null; });
+          } catch (_) { watcher = null; }
+          fs.watchFile(file, { interval: 2000 }, () => kick());
         }
       }
       data.health = {
@@ -452,9 +437,12 @@ async function openDashboardTab(browser, page) {
         message: health.message,
         missingAnchors: health.missingAnchors,
       };
-      // 轮次/步数没变化就认为空闲，逐步拉长轮询间隔
+      // 判定忙闲：正在跑的一轮必须保持高频，否则长时间思考/长工具期间
+      // 轮次步数没变化，会被误判成空闲降到 5 秒，底栏数字看起来像卡住。
+      const running = !!(data.ok && data.summary && data.summary.running);
       const sig = data.ok ? (data.summary.turns + ':' + data.summary.steps) : 'nok';
-      if (sig !== lastSig) { lastSig = sig; lastChangeAt = Date.now(); }
+      if (sig !== lastSig || running) { lastSig = sig; lastChangeAt = Date.now(); }
+      lastBusy = running;
       await page.evaluate((payload) => {
         if (window.__dshBar) window.__dshBar.render(payload);
       }, data).catch(() => {});
@@ -462,7 +450,7 @@ async function openDashboardTab(browser, page) {
       log('loop error', error.message);
       break;
     }
-    const idle = Date.now() - lastChangeAt > IDLE_AFTER_MS;
+    const idle = !lastBusy && Date.now() - lastChangeAt > IDLE_AFTER_MS;
     await Promise.race([
       new Promise((resolve) => setTimeout(resolve, idle ? IDLE_REFRESH_MS : REFRESH_MS)),
       new Promise((resolve) => { kickResolver = resolve; }),
@@ -470,6 +458,7 @@ async function openDashboardTab(browser, page) {
     kickResolver = null;
   }
   if (watchedPath) fs.unwatchFile(watchedPath);
+  if (watcher) { try { watcher.close(); } catch (_) { /* 已关闭 */ } }
   log('detached');
 }
 

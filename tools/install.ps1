@@ -266,8 +266,39 @@ if ($stale.Count -gt 0) { Say ("停止 $($stale.Count) 个旧面板服务进程�
 Get-CimInstance Win32_Process -Filter "Name='node.exe'" |
   Where-Object { $_.CommandLine -match 'injector\.js' } |
   ForEach-Object { Stop-Process -Id $_.ProcessId -Force -ErrorAction SilentlyContinue }
+$startedAt = Get-Date
 Start-Process -FilePath "$env:WINDIR\System32\wscript.exe" -ArgumentList '//nologo', (Join-Path $barDir 'injector-only.vbs') -WindowStyle Hidden | Out-Null
-Start-Sleep -Seconds 8
+
+# 等注入器就绪：轮询 health.json，而不是固定睡 8 秒（实测恢复 0.7 秒，慢机器上 8 秒又可能不够）
+$healthFile = Join-Path $barDir 'health.json'
+$codexUp = $false
+foreach ($cdpProbe in @('http://127.0.0.1:9223', 'http://[::1]:9223')) {
+  try {
+    $null = Invoke-RestMethod "$cdpProbe/json/version" -TimeoutSec 2
+    $codexUp = $true
+    break
+  } catch { }
+}
+
+if ($codexUp) {
+  $ready = $false
+  $deadline = (Get-Date).AddSeconds(20)
+  while ((Get-Date) -lt $deadline) {
+    Start-Sleep -Milliseconds 400
+    if (Test-Path $healthFile) {
+      # 必须比本次启动新，避免read到上一次运行留下的旧文件
+      if ((Get-Item $healthFile).LastWriteTime -ge $startedAt) {
+        try {
+          $h = Get-Content $healthFile -Raw -Encoding UTF8 | ConvertFrom-Json
+          if ($h.state -in @('ok', 'empty')) { $ready = $true; break }
+        } catch { }
+      }
+    }
+  }
+  if (-not $ready) { Info '注入器 20 秒内未就绪，继续（底栏可能稍后才出现）' }
+} else {
+  Info 'Codex 未运行，跳过等待（下次用快捷方式启动即可）'
+}
 
 # 重载渲染进程：安装过程停掉了旧的面板服务，不重载的话已打开的面板会停在"未能显示"
 $reload = Join-Path $here 'reload-page.js'

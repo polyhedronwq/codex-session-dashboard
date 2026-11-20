@@ -1,7 +1,7 @@
 (() => {
   // Bump when this file changes: the injector logs it, and a stale build means the
   // page is still running old code (the install guard below would otherwise hide that).
-  const BUILD = '2026-11-19.6';
+  const BUILD = '2026-11-19.7';
   if (window.__dshBarInstalled) return;
   window.__dshBarInstalled = true;
   window.__dshBarBuild = BUILD;
@@ -670,7 +670,17 @@
     ensure();
     if (window.__dshTurns) ensureTurnChips(window.__dshTurns);
   }, 1500);
-  const placeTimer = setInterval(place, 500);
+  // 事件驱动为主：输入框尺寸变化会触发 ResizeObserver；1 秒的定时器只做兜底，
+  // 原来 500ms 会每秒做两次全栏几何测量。
+  const placeTimer = setInterval(place, 1000);
+  let resizeObserver = null;
+  try {
+    const anchor = editorEl();
+    if (anchor && typeof ResizeObserver !== 'undefined') {
+      resizeObserver = new ResizeObserver(() => place());
+      resizeObserver.observe(anchor);
+    }
+  } catch (_) { resizeObserver = null; }
   window.addEventListener('resize', place);
 
   window.__dshBar = { render, place, ensure };

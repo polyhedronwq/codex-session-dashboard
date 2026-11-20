@@ -117,13 +117,68 @@ build.ps1      src → dist → 发布包（含逐文件 SHA-256 清单）
 ```powershell
 ./build.ps1                          # 构建并同步到本机运行位置
 ./build.ps1 -NoMirror                # 只出 dist
-./verify/run-all.ps1                 # 回归：语法/一致性/服务端/面板/底栏/单测/安装器
+./verify/run-all.ps1                 # 全量回归（42 项，约 85 秒）
 ./verify/run-all.ps1 -Snapshot       # 额外保存截图与数值快照
+./verify/run-all.ps1 -SkipBar        # 跳过依赖运行中 Codex 的检查
+node verify/test-resolver.js         # 会话判定单元测试（8 项）
 python verify/test_server.py         # 解析层单元测试
 ./verify/perf-baseline.ps1           # 生成 docs/PERF.md
 ```
 
+回归覆盖：语法、构建一致性、服务端、消费者契约（按 Codex 的读法校验）、面板渲染与数值对账、底栏三态、会话判定、解析单测、安装器，以及**真实流程**（像用户一样点开面板，同时监听控制台并截图）。
+
+每次跑完会在 `verify/shots/` 生成一组固定截图：底栏、用量 chip、四个页签 × 深浅色，以及真实打开的面板，供人工复核。
+
 路径使用 `{{node}}` / `{{python}}` / `{{server}}` 占位符，源码不含任何本机绝对路径；构建与安装各自渲染。
+
+## 参数与调优
+
+所有时间与阈值都是源码常量，**没有配置文件**——这些值是按实测定的，改之前建议先看依据。下表与代码一致（1.0.0）。
+
+### 刷新与轮询
+
+| 项 | 值 | 位置 | 依据 |
+| --- | --- | --- | --- |
+| 底栏活跃刷新 | **1000 ms** | `src/bar/injector.js` `REFRESH_MS` | 有一轮正在跑时始终保持这个频率，数据落盘本身就有 1–2 秒延迟 |
+| 底栏空闲刷新 | **5000 ms** | `IDLE_REFRESH_MS` | 连续 30 秒没有正在运行的轮次后降频 |
+| 进入空闲的判定 | **30 s** | `IDLE_AFTER_MS` | 以 `summary.running` 为准；**不看轮次/步数**——长思考期间步数不变，用步数会被误判成空闲 |
+| `rollout` 文件监听 | **事件驱动** + 2 s 兜底 | `injector.js` | `fs.watch` 触发即时刷新；Windows 上偶发漏事件，用 2 s 轮询兜底（原来是 200 ms 轮询，全天不停） |
+| health.json 心跳 | **60 s** | `setHealth` 写入节流 | 状态变化才写，不变时只补心跳，避免每秒写盘 |
+| 面板刷新（运行中） | **4000 ms** | `src/shared/panel.html` `REFRESH_MS` | 面板可见时才轮询，切到后台自动暂停 |
+| 面板刷新（静止） | **30000 ms** | `IDLE_MS` | 静止时数据本来就不变，没必要每分钟往返 15 次 |
+| 底栏自检 | **1500 ms** | `src/bar/injected.js` | 页面结构变化后把底栏补回来（配合 MutationObserver） |
+| 底栏定位 | **1000 ms** + `ResizeObserver` | `injected.js` `placeTimer` | 主要靠输入框尺寸变化事件驱动，定时器只做兜底 |
+
+### 缓存与超时
+
+| 项 | 值 | 位置 | 依据 |
+| --- | --- | --- | --- |
+| 额度缓存 TTL（有值） | **3600 s** | `src/shared/server.py` `_QUOTA_TTL_OK` | 实测服务端聚合几小时才变一次（多条会话的 `data_as_of` 是同一时间），15 分钟刷新只是重复请求 |
+| 额度缓存 TTL（未归属） | **7200 s** | `_QUOTA_TTL_MISSING` | 未归属的会话不会因为等待就出现 |
+| 额度缓存条目上限 | **20** | `_QUOTA_CACHE_KEEP` | 防 `quota-cache.json` 无限增长；只接受 UUID 作为 key |
+| 额度接口超时 | **6 s** | `_QUOTA_TIMEOUT` | 失败就显示 `—`，不拖住面板 |
+| CDP 连接超时 | **5 s** × 3 个候选 | `injector.js` | 依次尝试 `127.0.0.1` / `[::1]` / `localhost`，Chromium 有时只监听其中一个 |
+| 安装器等待注入器 | **≤ 20 s**，轮询 | `tools/install.ps1` | 就绪判定看 `health.json` 且必须是本次启动后新写的；实测通常 1 秒内 |
+
+### 长度限制
+
+| 项 | 值 | 位置 | 用途 |
+| --- | --- | --- | --- |
+| 消息预览 | **200 字** | `server.py` `plain_text(item, 200)` | 统计/轨迹页认出"是哪一轮"，已去掉 markdown 标记 |
+| 时间线消息文本 | **400 字** | `plain_text(item, 400)` | 每步事件里的消息摘要 |
+| 工具输出详情 | **4000 字** | `plain_text(item, 4000)` | 轨迹页展开单条工具输出时 |
+| 改动文件列表 | **前 5 个** | `server.py` | 更多就折叠 |
+
+### 端口与路径
+
+| 项 | 值 | 说明 |
+| --- | --- | --- |
+| CDP 调试端口 | **9223** | 固定；本机回环，但同机任意程序可连，见「安全说明」 |
+| 单实例锁 | **9224** | 防止重复启动注入器 |
+| 安装根 | `%USERPROFILE%\.codex-bar` | 底栏、插件、日志、缓存都在这里 |
+| Codex 配置 | `%USERPROFILE%\.codex\config.toml` | 安装时写入市场源与插件注册 |
+
+> 想改这些值：改源码常量后重新 `./build.ps1` 并安装。不建议只调数字——比如把刷新压到 100 ms 会把 CPU 拉满，把预览调大只是更费内存。
 
 ## 许可
 
