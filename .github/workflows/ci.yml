@@ -8,6 +8,10 @@ on:
 jobs:
   windows:
     runs-on: windows-latest
+    # GitHub 的 PowerShell 控制台用系统 ANSI 代码页（cp1252）。脚本输出中文时必须显式
+    # 让 Python 用 UTF-8，否则 UnicodeEncodeError 会让静态契约步骤失败（本机 63 项绿、CI 红）。
+    env:
+      PYTHONIOENCODING: utf-8
     strategy:
       fail-fast: false
       matrix:
