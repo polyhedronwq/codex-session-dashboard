@@ -150,8 +150,10 @@
     if (n >= 1e4) return (n / 1e3).toFixed(1).replace(/\.0$/, '') + 'K';
     return n.toLocaleString('en-US');
   }
-  // data_as_of 是 UTC（形如 2026-11-19T07:14:58Z），直接截取会显示成错误的本地时间
+  // data_as_of 是 UTC（形如 2026-11-19T07:14:58Z），直接截取会显示成错误的本地时间。
+  // null/空串必须保持"没有数据"，否则 new Date(null) 会变成 1970 并显示成 08:00。
   function localHM(iso) {
+    if (!iso) return null;
     const date = new Date(iso);
     if (!date || Number.isNaN(date.getTime())) return null;
     return String(date.getHours()).padStart(2, '0') + ':' + String(date.getMinutes()).padStart(2, '0');
