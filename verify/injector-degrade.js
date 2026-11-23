@@ -116,6 +116,46 @@ async function waitFor(predicate, timeoutMs) {
     console.log('  PASS 恢复后 health=ok 且灰点隐藏');
   }
 
+  // P12：首页/新对话本来就没有会话容器。把容器和消息锚点一起摘掉，模拟"全新的空对话"，
+  // 这时必须是 empty（底栏隐藏、不报故障点），而不是 no-anchor 的橙色故障点。
+  const saved = await page.evaluate(() => {
+    const attrs = ['data-response-annotation-conversation',
+                   'data-local-conversation-final-assistant',
+                   'data-content-search-turn-key'];
+    const rows = [];
+    for (const attr of attrs) {
+      for (const el of document.querySelectorAll(`[${attr}]`)) {
+        rows.push([el, attr, el.getAttribute(attr)]);
+        el.removeAttribute(attr);
+      }
+    }
+    window.__dshSimNewChat = rows;
+    return rows.length;
+  });
+  try {
+    const becameEmpty = await waitFor(() => readHealth().state === 'empty', 15000);
+    const emptyBar = await barState().catch(() => null);
+    const bar = emptyBar || {};
+    if (becameEmpty && bar.barVisible === false && bar.dotVisible === false) {
+      console.log('  PASS 模拟新对话：health=empty、底栏隐藏、无故障点');
+    } else {
+      ok = false;
+      console.log(`  FAIL 模拟新对话：health=${readHealth().state} bar=${JSON.stringify(emptyBar)}`);
+    }
+  } finally {
+    await page.evaluate(() => {
+      for (const [el, attr, value] of (window.__dshSimNewChat || [])) {
+        if (value !== null) el.setAttribute(attr, value);
+      }
+      delete window.__dshSimNewChat;
+    }).catch(() => {});
+    const back = await waitFor(() => readHealth().state === 'ok', 20000);
+    if (!back) {
+      ok = false;
+      console.log(`  FAIL 模拟新对话恢复失败，health=${readHealth().state}`);
+    }
+  }
+
   await browser.close().catch(() => {});
   process.exit(ok ? 0 : 1);
 })().catch((error) => {

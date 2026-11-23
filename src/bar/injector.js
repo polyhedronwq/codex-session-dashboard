@@ -342,6 +342,23 @@ async function openDashboardTab(browser, page) {
     log('dashboard: no new-tab page button');
     return false;
   }
+
+  // 新标签页的启动页本身会列出「会话仪表盘」入口卡片（当前构建）。先直接点卡片：
+  // 走 More 菜单在部分构建里定位不到菜单项，会把用户留在新标签页（历史 bug）。
+  const launcherCard = target.locator('button:visible, [role="button"]:visible, a:visible')
+    .filter({ hasText: /^会话仪表盘$/ }).first();
+  if (await launcherCard.count()) {
+    await launcherCard.click({ timeout: 3000 }).catch(() => {});
+    for (let attempt = 0; attempt < 60; attempt += 1) {
+      await target.waitForTimeout(100);
+      const now = await readState();
+      if (now && now.count > 0) {
+        log('dashboard: opened from launcher card');
+        return true;
+      }
+    }
+  }
+
   await more.click({ timeout: 3000 }).catch(() => {});
 
   let item = null;
@@ -352,9 +369,21 @@ async function openDashboardTab(browser, page) {
       const candidate = menu.getByText('会话仪表盘', { exact: true }).first();
       if (await candidate.count()) item = candidate;
     }
+    if (!item) {
+      // 菜单开了但按文案抓不到（图标/嵌套结构差异）：退而找可见菜单项里的同名文字
+      const loose = target.locator('[role="menuitem"]:visible, [role="option"]:visible')
+        .filter({ hasText: '会话仪表盘' }).first();
+      if (await loose.count()) item = loose;
+    }
   }
   if (!item) {
     log('dashboard: no menu item');
+    // 别把用户留在刚创建的新标签页上：关菜单、关掉空标签页，回到原来的会话。
+    await target.keyboard.press('Escape').catch(() => {});
+    await target.evaluate(() => {
+      const close = document.querySelector('button[aria-label="关闭新标签页标签页"]');
+      if (close) close.click();
+    }).catch(() => {});
     return false;
   }
   await item.click({ timeout: 3000 });
@@ -381,11 +410,20 @@ async function openDashboardTab(browser, page) {
   while (!stopped) {
     try {
       const missing = await page.evaluate(PROBE_ANCHORS).catch(() => []);
-      health.missingAnchors = missing;
-      if (missing.length > 0) {
+      const resolved = await resolveThreadInPage(page, lastThread).catch(() => ({ id: null, reason: 'unknown' }));
+      // 首页/新对话本来就没有会话容器：只要其它锚点还在、页面上也没有任何消息，
+      // 这就是"空对话"而不是故障（以前一律报 no-anchor，用户会看到橙色故障点）。
+      const looksLikeConversation = (resolved.reason === 'empty' && missing.length > 0)
+        ? await page.evaluate(() => !!document.querySelector('[data-local-conversation-final-assistant="true"], [data-content-search-turn-key]')).catch(() => true)
+        : false;
+      const newChatLike = resolved.reason === 'empty'
+        && missing.length > 0
+        && missing.every((name) => name === '会话消息容器')
+        && !looksLikeConversation;
+      health.missingAnchors = newChatLike ? [] : missing;
+      if (missing.length > 0 && !newChatLike) {
         setHealth('no-anchor', '缺少页面锚点: ' + missing.join('、'));
       }
-      const resolved = await resolveThreadInPage(page, lastThread).catch(() => ({ id: null, reason: 'unknown' }));
       const thread = resolved.id;
       health.thread = thread || health.thread;
       // Log only when the resolved conversation changes, so the log stays short while still
@@ -402,7 +440,7 @@ async function openDashboardTab(browser, page) {
       // 有会话时下面的 data.ok 分支会把状态推回 ok。
       // 只有"锚点齐全"时才把空会话当成正常状态；
       // 锚点缺失是故障，不能被"看起来像空会话"覆盖掉。
-      if (resolved.reason === 'empty' && missing.length === 0) setHealth('empty', '');
+      if (resolved.reason === 'empty' && (missing.length === 0 || newChatLike)) setHealth('empty', '');
       if (thread) {
         data = await metrics.request(thread).catch((error) => {
           log('metrics request failed', error.message);

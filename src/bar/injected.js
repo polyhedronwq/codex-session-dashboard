@@ -354,7 +354,9 @@
   let lastSpace = '';
 
   function resolveComposer() {
-    if (cachedEditor && cachedEditor.isConnected) {
+    // Codex 切换会话/标签页时，旧编辑器仍然 connected 但被隐藏（宽高 0）。
+    // 只看 isConnected 会一直拿旧编辑器算位置，底栏就会"切到第二个会话后消失"。
+    if (cachedEditor && cachedEditor.isConnected && cachedEditor.getBoundingClientRect().width > 200) {
       return { editor: cachedEditor, composer: cachedComposer };
     }
     cachedEditor = editorEl();
@@ -369,7 +371,8 @@
     if (!root) return;
     const { editor, composer } = resolveComposer();
     if (!editor) { root.style.display = 'none'; lastPlacedKey = ''; return; }
-    const box = composer || editor;
+    // 缓存/布局切换瞬间 composer 可能比 editor 先塌成 0；这时用 editor 的位置算。
+    const box = (composer && composer.getBoundingClientRect().width >= 100) ? composer : editor;
     const r = box.getBoundingClientRect();
     if (!r || r.width < 100) { root.style.display = 'none'; lastPlacedKey = ''; return; }
     root.style.display = '';

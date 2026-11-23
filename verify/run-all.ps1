@@ -446,6 +446,16 @@ if ($SkipBar) {
     $LASTEXITCODE -eq 0
   }
 
+  Check '底栏/切换会话后底栏仍在（缓存编辑器回归）' {
+    & $py (Join-Path $verify 'bar-switch.py')
+    $LASTEXITCODE -eq 0
+  }
+
+  Check '底栏/仪表盘按钮真的打开标签页（并能在关闭后恢复）' {
+    & $node (Join-Path $verify 'dashboard-button.js')
+    $LASTEXITCODE -eq 0
+  }
+
   Check '重启注入器后能在 20 秒内恢复' {
     # 曾经因为"窗口在后台时布局尺寸为 0"被误判成空会话，底栏消失 3 分钟
     Get-CimInstance Win32_Process -Filter "Name='node.exe'" |
