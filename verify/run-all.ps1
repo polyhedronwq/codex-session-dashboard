@@ -536,6 +536,11 @@ Check 'README 参数与代码一致' {
   $LASTEXITCODE -eq 0
 }
 
+Check 'README 命令清单可执行（perf-baseline 现场实跑）' {
+  & $py (Join-Path $verify 'readme-commands.py')
+  $LASTEXITCODE -eq 0
+}
+
 Check '发布包内容：模板占位符保留、无本机路径' {
   $zip = Get-ChildItem (Join-Path $root 'dist-package') -Filter '*.zip' -ErrorAction SilentlyContinue |
     Sort-Object LastWriteTime -Descending | Select-Object -First 1
@@ -622,6 +627,11 @@ Section 'J. 用户脚本'
 
 Check '用户脚本/安装契约（启动链路/重载/缺依赖/快捷方式）' {
   & $py (Join-Path $verify 'scripts-contract.py')
+  $LASTEXITCODE -eq 0
+}
+
+Check 'launch.vbs 启动链路实跑（假 Codex/node 记录器，不碰真实 Codex）' {
+  & $py (Join-Path $verify 'launch-vbs.py')
   $LASTEXITCODE -eq 0
 }
 
