@@ -562,6 +562,18 @@ function buildHostHtml(snapshot) {
       && changeText.includes('第 1 轮后'),
       changeText.slice(0, 100));
 
+    // ---------- 16. 最近一轮 kv：全字段对账（以前只有"6 组以上"） ----------
+    const lastKv = await f(() => [...document.querySelectorAll('#last-turn dt')].map((dt) => [
+      dt.textContent.trim(), (dt.nextElementSibling || {}).textContent?.trim() || '',
+    ]));
+    const kvMap = Object.fromEntries(lastKv);
+    record('面板/概览 最近一轮 kv 全字段对账',
+      kvMap['输入'] === '3,000 tok' && kvMap['输出'] === '300 tok' && kvMap['其中推理'] === '10 tok'
+      && kvMap['缓存命中'] === '50.0%' && kvMap['模型用时'] === '1.5s' && kvMap['工具用时'] === '200ms'
+      && kvMap['首 token 延迟'] === '100ms' && kvMap['总用时'] === '2s'
+      && kvMap['上下文占用'] === '12,000 / 258,400' && kvMap['自动压缩'] === '1 次',
+      JSON.stringify(lastKv));
+
     record('面板契约/无脚本错误', pageErrors.length === 0, pageErrors.slice(0, 2).join(' | '));
   } catch (error) {
     record('面板契约/执行', false, error && error.message ? error.message.split('\n')[0] : String(error));

@@ -588,6 +588,11 @@ Check '安装器生命周期（隔离 HOME：全新/Codex未运行/config保留/
   $LASTEXITCODE -eq 0
 }
 
+Check 'render-paths 渲染边界（空格路径/兜底语句/JSON 转义）' {
+  & $py (Join-Path $verify 'render-paths.py')
+  $LASTEXITCODE -eq 0
+}
+
 # ============================================================ I. 真实流程与截图
 Section 'I. 真实流程与截图'
 
@@ -647,6 +652,14 @@ Section 'K. 性能阈值'
 
 Check '性能阈值（解析/指标往返/空闲 CPU/内存）' {
   & powershell -NoProfile -ExecutionPolicy Bypass -File (Join-Path $verify 'perf-check.ps1')
+  $LASTEXITCODE -eq 0
+}
+
+# ============================================================ L. 重载与重注入
+Section 'L. 重载与重注入'
+
+Check 'reload-page.js 实跑 + reload 后重新注入当前构建' {
+  & $py (Join-Path $verify 'reinject-reload.py')
   $LASTEXITCODE -eq 0
 }
 
