@@ -578,6 +578,11 @@ Check 'uninstall.ps1 语法正确' {
   $errs.Count -eq 0
 }
 
+Check '安装器生命周期（隔离 HOME：全新/Codex未运行/config保留/连装两次）' {
+  & $py (Join-Path $verify 'install-lifecycle.py')
+  $LASTEXITCODE -eq 0
+}
+
 # ============================================================ I. 真实流程与截图
 Section 'I. 真实流程与截图'
 
@@ -624,6 +629,14 @@ Check '用户脚本冒烟（诊断/图标/监视器/-NoMirror）' {
   $args = @()
   if ($Full) { $args += '-Full' }
   & powershell -NoProfile -ExecutionPolicy Bypass -File (Join-Path $verify 'scripts-smoke.ps1') @args
+  $LASTEXITCODE -eq 0
+}
+
+# ============================================================ K. 性能阈值
+Section 'K. 性能阈值'
+
+Check '性能阈值（解析/指标往返/空闲 CPU/内存）' {
+  & powershell -NoProfile -ExecutionPolicy Bypass -File (Join-Path $verify 'perf-check.ps1')
   $LASTEXITCODE -eq 0
 }
 

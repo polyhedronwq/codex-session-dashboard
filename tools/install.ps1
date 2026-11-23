@@ -3,6 +3,8 @@
 #   install.cmd                     交互式
 #   install.ps1 -CheckOnly          只检查，不改任何东西
 #   install.ps1 -Yes                跳过确认
+#   install.ps1 -Yes -TestHome <目录>  测试用：全部产物装进隔离目录，
+#                                    不停止任何服务/进程、不碰调试端口、不碰真实配置与快捷方式
 #
 # 安装根目录：%USERPROFILE%\.codex-bar
 #   ├─ *.js / *.vbs / *.py …  底栏
@@ -13,7 +15,8 @@
 
 param(
   [switch]$CheckOnly,
-  [switch]$Yes
+  [switch]$Yes,
+  [string]$TestHome
 )
 
 $ErrorActionPreference = 'Stop'
@@ -25,11 +28,22 @@ $pkgMarket = Join-Path $here 'plugin-market'
 $pkgManifest = Join-Path $here 'manifest.json'
 $render = Join-Path $here 'render-paths.ps1'
 
-$barDir = Join-Path $env:USERPROFILE '.codex-bar'
-$marketDir = Join-Path $barDir 'plugin-market'
-$configPath = Join-Path $env:USERPROFILE '.codex\config.toml'
-$startMenu = Join-Path $env:APPDATA 'Microsoft\Windows\Start Menu\Programs'
-$desktop = [Environment]::GetFolderPath('Desktop')
+# -TestHome 是安装器的测试入口：把所有会被写入的位置都改到隔离目录，
+# 并使用与"Codex 未运行"相同的等待分支，从而能在临时 HOME 里跑完整装载流程。
+$testMode = [bool]$TestHome
+if ($testMode) {
+  $barDir = Join-Path $TestHome '.codex-bar'
+  $marketDir = Join-Path $barDir 'plugin-market'
+  $configPath = Join-Path $TestHome '.codex\config.toml'
+  $startMenu = Join-Path $TestHome 'StartMenu'
+  $desktop = Join-Path $TestHome 'Desktop'
+} else {
+  $barDir = Join-Path $env:USERPROFILE '.codex-bar'
+  $marketDir = Join-Path $barDir 'plugin-market'
+  $configPath = Join-Path $env:USERPROFILE '.codex\config.toml'
+  $startMenu = Join-Path $env:APPDATA 'Microsoft\Windows\Start Menu\Programs'
+  $desktop = [Environment]::GetFolderPath('Desktop')
+}
 
 function Say($t) { Write-Host "  $t" }
 function Step($t) { Write-Host ''; Write-Host "== $t" -ForegroundColor Cyan }
@@ -200,6 +214,10 @@ Say '路径模板已按本机渲染'
 # ---------------------------------------------------------------- 注册
 Step '4/4 注册并启动'
 
+# Codex 从未运行过时 ~/.codex 可能不存在；安装仍然要能写配置（测试模式同样受益）
+$configDir = Split-Path -Parent $configPath
+if (-not (Test-Path $configDir)) { New-Item -ItemType Directory -Path $configDir -Force | Out-Null }
+
 $config = @(if (Test-Path $configPath) { Get-Content $configPath -Encoding UTF8 } else { @() })
 function Remove-Section([string[]]$lines, [string]$header) {
   $out = New-Object System.Collections.Generic.List[string]
@@ -233,6 +251,7 @@ $icon = Join-Path $barDir 'chatgpt-white.ico'
 $launch = Join-Path $barDir 'launch.vbs'
 $shortcuts = @()
 foreach ($dir in @($desktop, $startMenu)) {
+  if (-not (Test-Path $dir)) { New-Item -ItemType Directory -Path $dir -Force | Out-Null }
   $link = Join-Path $dir 'ChatGPT 仪表盘.lnk'
   $sc = $shell.CreateShortcut($link)
   $sc.TargetPath = "$env:WINDIR\System32\wscript.exe"
@@ -258,26 +277,35 @@ Say '快捷方式: 桌面 + 开始菜单'
   [System.IO.File]::WriteAllText((Join-Path $barDir '.install-manifest.json'), $_, (New-Object System.Text.UTF8Encoding($false)))
 }
 
-$stale = @(Get-CimInstance Win32_Process -Filter "Name='python.exe'" |
-  Where-Object { $_.CommandLine -match 'session-dashboard.*server\.py' })
-foreach ($p in $stale) { Stop-Process -Id $p.ProcessId -Force -ErrorAction SilentlyContinue }
-if ($stale.Count -gt 0) { Say ("停止 $($stale.Count) 个旧面板服务进程（下次打开仪表盘自动重启）") }
+$stale = @()
+if (-not $testMode) {
+  $stale = @(Get-CimInstance Win32_Process -Filter "Name='python.exe'" |
+    Where-Object { $_.CommandLine -match 'session-dashboard.*server\.py' })
+  foreach ($p in $stale) { Stop-Process -Id $p.ProcessId -Force -ErrorAction SilentlyContinue }
+  if ($stale.Count -gt 0) { Say ("停止 $($stale.Count) 个旧面板服务进程（下次打开仪表盘自动重启）") }
+} else {
+  Say '测试模式：跳过停止旧面板服务/注入器（不碰正在运行的实例）'
+}
 
-Get-CimInstance Win32_Process -Filter "Name='node.exe'" |
-  Where-Object { $_.CommandLine -match 'injector\.js' } |
-  ForEach-Object { Stop-Process -Id $_.ProcessId -Force -ErrorAction SilentlyContinue }
 $startedAt = Get-Date
-Start-Process -FilePath "$env:WINDIR\System32\wscript.exe" -ArgumentList '//nologo', (Join-Path $barDir 'injector-only.vbs') -WindowStyle Hidden | Out-Null
+if (-not $testMode) {
+  Get-CimInstance Win32_Process -Filter "Name='node.exe'" |
+    Where-Object { $_.CommandLine -match 'injector\.js' } |
+    ForEach-Object { Stop-Process -Id $_.ProcessId -Force -ErrorAction SilentlyContinue }
+  Start-Process -FilePath "$env:WINDIR\System32\wscript.exe" -ArgumentList '//nologo', (Join-Path $barDir 'injector-only.vbs') -WindowStyle Hidden | Out-Null
+}
 
 # 等注入器就绪：轮询 health.json，而不是固定睡 8 秒（实测恢复 0.7 秒，慢机器上 8 秒又可能不够）
 $healthFile = Join-Path $barDir 'health.json'
 $codexUp = $false
-foreach ($cdpProbe in @('http://127.0.0.1:9223', 'http://[::1]:9223')) {
-  try {
-    $null = Invoke-RestMethod "$cdpProbe/json/version" -TimeoutSec 2
-    $codexUp = $true
-    break
-  } catch { }
+if (-not $testMode) {
+  foreach ($cdpProbe in @('http://127.0.0.1:9223', 'http://[::1]:9223')) {
+    try {
+      $null = Invoke-RestMethod "$cdpProbe/json/version" -TimeoutSec 2
+      $codexUp = $true
+      break
+    } catch { }
+  }
 }
 
 if ($codexUp) {
@@ -302,19 +330,23 @@ if ($codexUp) {
 
 # 重载渲染进程：安装过程停掉了旧的面板服务，不重载的话已打开的面板会停在"未能显示"
 $reload = Join-Path $here 'reload-page.js'
-if ((Test-Path $reload) -and $node) {
+if (-not $testMode -and (Test-Path $reload) -and $node) {
   & $node $reload 2>&1 | Out-Null
   Start-Sleep -Seconds 2
 }
 
 
-$inj = @(Get-CimInstance Win32_Process -Filter "Name='node.exe'" | Where-Object { $_.CommandLine -match 'injector\.js' })
-if ($inj.Count -eq 1) { Ok '注入器已启动' } else { Bad ('注入器进程数 ' + $inj.Count) }
-try {
-  $null = Invoke-RestMethod 'http://localhost:9223/json/version' -TimeoutSec 3
-  Ok '调试端口 9223 可用'
-} catch {
-  Info '调试端口 9223 未打开：请用桌面「ChatGPT 仪表盘」启动 Codex（若已在运行，先完全退出）'
+if (-not $testMode) {
+  $inj = @(Get-CimInstance Win32_Process -Filter "Name='node.exe'" | Where-Object { $_.CommandLine -match 'injector\.js' })
+  if ($inj.Count -eq 1) { Ok '注入器已启动' } else { Bad ('注入器进程数 ' + $inj.Count) }
+  try {
+    $null = Invoke-RestMethod 'http://localhost:9223/json/version' -TimeoutSec 3
+    Ok '调试端口 9223 可用'
+  } catch {
+    Info '调试端口 9223 未打开：请用桌面「ChatGPT 仪表盘」启动 Codex（若已在运行，先完全退出）'
+  }
+} else {
+  Info ('测试模式：安装产物在 ' + $TestHome + '，未做任何进程/端口检查')
 }
 
 Write-Host ''

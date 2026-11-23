@@ -120,7 +120,7 @@ build.ps1      src → dist → 发布包（含逐文件 SHA-256 清单）
 ```powershell
 ./build.ps1                          # 构建并同步到本机运行位置
 ./build.ps1 -NoMirror                # 只出 dist
-./verify/run-all.ps1                 # 全量回归（42 项，约 85 秒）
+./verify/run-all.ps1                 # 全量回归（56 项，约 3 分钟）
 ./verify/run-all.ps1 -Snapshot       # 额外保存截图与数值快照
 ./verify/run-all.ps1 -SkipBar        # 跳过依赖运行中 Codex 的检查
 node verify/test-resolver.js         # 会话判定单元测试（8 项）
@@ -128,7 +128,7 @@ python verify/test_server.py         # 解析层单元测试
 ./verify/perf-baseline.ps1           # 生成 docs/PERF.md
 ```
 
-回归覆盖：语法、构建一致性、服务端、消费者契约（按 Codex 的读法校验）、面板渲染与数值对账、底栏三态、会话判定、解析单测、安装器，以及**真实流程**（像用户一样点开面板，同时监听控制台并截图）。
+回归覆盖：语法、构建一致性、服务端、消费者契约（按 Codex 的读法校验）、面板渲染与数值对账、底栏三态、会话判定、解析单测、安装器生命周期（隔离 HOME）、性能阈值，以及**真实流程**（像用户一样点开面板，同时监听控制台并截图）。
 
 每次跑完会在 `verify/shots/` 生成一组固定截图：底栏、用量 chip、四个页签 × 深浅色，以及真实打开的面板，供人工复核。
 
@@ -180,6 +180,7 @@ python verify/test_server.py         # 解析层单元测试
 | 单实例锁 | **9224** | 防止重复启动注入器 |
 | 安装根 | `%USERPROFILE%\.codex-bar` | 底栏、插件、日志、缓存都在这里 |
 | Codex 配置 | `%USERPROFILE%\.codex\config.toml` | 安装时写入市场源与插件注册 |
+| 安装器测试入口 | `install.ps1 -TestHome <目录>` | 测试用：产物写进隔离目录，不碰进程/服务/调试端口/真实配置与快捷方式 |
 
 > 想改这些值：改源码常量后重新 `./build.ps1` 并安装。不建议只调数字——比如把刷新压到 100 ms 会把 CPU 拉满，把预览调大只是更费内存。
 
