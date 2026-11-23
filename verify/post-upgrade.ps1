@@ -82,7 +82,7 @@ Check 'health.json 合法，且底栏构建与安装目录一致' {
   $h = Get-Content $healthFile -Raw -Encoding UTF8 | ConvertFrom-Json
   $names = $h.PSObject.Properties.Name
   $okShape = ($names -contains 'state') -and ($names -contains 'missingAnchors') -and ($names -contains 'build')
-  $okState = $h.state -in @('ok', 'empty', 'no-anchor', 'error')
+  $okState = $h.state -in @('ok', 'empty', 'starting', 'no-anchor', 'error')
   $okBuild = $h.build -eq $build
   if (-not ($okShape -and $okState -and $okBuild)) {
     Write-Host "        -> state=$($h.state) build=$($h.build)（安装版 $build）"

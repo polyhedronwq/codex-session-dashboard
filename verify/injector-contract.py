@@ -20,7 +20,7 @@ CHECKS = [
     ('文件监听：低频兜底轮询', 'fs.watchFile(' in INJECTOR),
     ('单实例锁：提示语', 'another injector is already running' in INJECTOR),
     ('活跃刷新常量', 'REFRESH_MS = 1000' in INJECTOR),
-    ('空闲刷新常量', 'IDLE_REFRESH_MS = 5000' in INJECTOR),
+    ('空闲刷新常量（2 秒）', 'IDLE_REFRESH_MS = 2000' in INJECTOR),
     ('空闲判定阈值', 'IDLE_AFTER_MS = 30000' in INJECTOR),
     ('health 状态：no-anchor', "setHealth('no-anchor'" in INJECTOR),
     ('health 状态：empty', "setHealth('empty'" in INJECTOR),

@@ -601,18 +601,29 @@
       head.total && head.total.total_tokens, head.cache_hit_pct,
       head.last_turn && head.last_turn.duration_ms,
       (data && data.turns || []).map((t) => t.steps + ':' + t.running).join(','),
+      // 健康状态也必须进签名：否则 ok → starting 这类"数据没变、状态变了"的切换会被提前返回吃掉
+      (data && data.health && data.health.state) || '',
     ]);
     if (sig === window.__dshBarSig) return;
     window.__dshBarSig = sig;
     root.dataset.theme = theme();
     const on = (id) => document.getElementById(id);
+    // 冷启动预热：即使这一刻已经能解析到会话（Codex 在恢复上次的面板），也先整条隐藏。
+    // 否则会显示"底栏有数据 + 橙色故障点（页面加载中）"，正是启动时看到的那一幕。
+    if (((data && data.health && data.health.state) || '') === 'starting') {
+      root.style.opacity = '0';
+      root.style.pointerEvents = 'none';
+      const warmingDot = on('dsh-health');
+      if (warmingDot) warmingDot.classList.add('hide');
+      return;
+    }
     // 拿不到指标时不再整条隐藏——那样用户只看到"底栏没了"，没有任何线索。
     // 保留一个灰点和仪表盘入口，原因写进 title 和 health.json。
     if (!data || data.ok !== true) {
       const state = (data && data.health && data.health.state) || '';
       const dot = on('dsh-health');
-      if (state === 'empty') {
-        // 新对话还没开始：整条隐藏，和以前一样，不打扰
+      if (state === 'empty' || state === 'starting') {
+        // 新对话/冷启动加载中：整条隐藏，和以前一样，不打扰（也不能亮故障点）
         root.style.opacity = '0';
         root.style.pointerEvents = 'none';
         if (dot) dot.classList.add('hide');
@@ -740,7 +751,15 @@
   };
   const onClick = (event) => {
     const target = event.target;
-    if (target && target.closest && target.closest('[data-app-action-sidebar-thread-id]')) kick();
+    if (!target || !target.closest) return;
+    const sidebarThread = target.closest('[data-app-action-sidebar-thread-id]');
+    const button = target.closest('button');
+    const newChat = button && (button.innerText || '').trim() === '新聊天';
+    if (!sidebarThread && !newChat) return;
+    // 点击那一刻新面板往往还没布局好（可见节点 0），只踢一次会解析不到，
+    // 之后要等下一轮轮询（空闲时 2 秒）才更新——所以按布局后的几个时间点补踢。
+    kick();
+    for (const delay of [200, 600, 1200]) setTimeout(kick, delay);
   };
   document.addEventListener('keydown', onKey, true);
   document.addEventListener('click', onClick, true);

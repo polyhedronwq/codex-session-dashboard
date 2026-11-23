@@ -147,7 +147,7 @@ python verify/test_server.py         # 解析层单元测试
 | 项 | 值 | 位置 | 依据 |
 | --- | --- | --- | --- |
 | 底栏活跃刷新 | **1000 ms** | `src/bar/injector.js` `REFRESH_MS` | 有一轮正在跑时始终保持这个频率，数据落盘本身就有 1–2 秒延迟 |
-| 底栏空闲刷新 | **5000 ms** | `IDLE_REFRESH_MS` | 连续 30 秒没有正在运行的轮次后降频 |
+| 底栏空闲刷新 | **2000 ms** | `IDLE_REFRESH_MS` | 连续 30 秒没有正在运行的轮次后降频 |
 | 进入空闲的判定 | **30 s** | `IDLE_AFTER_MS` | 以 `summary.running` 为准；**不看轮次/步数**——长思考期间步数不变，用步数会被误判成空闲 |
 | `rollout` 文件监听 | **事件驱动** + 2 s 兜底 | `injector.js` | `fs.watch` 触发即时刷新；Windows 上偶发漏事件，用 2 s 轮询兜底（原来是 200 ms 轮询，全天不停） |
 | health.json 心跳 | **60 s** | `setHealth` 写入节流 | 状态变化才写，不变时只补心跳，避免每秒写盘 |

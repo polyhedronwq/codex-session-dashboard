@@ -23,13 +23,21 @@ const INJECT_SRC = fs.readFileSync(path.join(HERE, 'injected.js'), 'utf8');
 // 会话判定逻辑单独成文件，便于单测（曾经因为兜底规则写错，显示成了别的会话的数据）
 const RESOLVER_SRC = fs.readFileSync(path.join(HERE, 'thread-resolver.js'), 'utf8');
 const REFRESH_MS = 1000;
-// 空闲时降频：没有新数据就 5 秒一探，避免空转
-const IDLE_REFRESH_MS = 5000;
+// 空闲时降频：没有新数据就 2 秒一探（原 5 秒，切会话后要等下一轮才发现，体感卡顿）
+const IDLE_REFRESH_MS = 2000;
 const IDLE_AFTER_MS = 30000;
+// 冷启动预热：Codex 渲染进程刚起来时页面还没有任何锚点（实测 8-12 秒）。
+// 这段时间判成"启动中"而不是故障，否则每次启动都先亮一个橙色故障点。
+// 超时后仍然缺锚点，照样按故障报出来（不掩盖真坏的情况）。
+const START_GRACE_MS = 20000;
 // 构建号取自页面脚本，保证 health.json 和底栏报告的是同一版本
 const BUILD = (INJECT_SRC.match(/const BUILD = '([^']+)'/) || [])[1] || 'unknown';
 
 let kickResolver = null;
+// 本次注入（含页面重载后重新注入）的时间点与"是否已就绪过一次"，
+// 用于冷启动预热：只有还没成功判定过、且注入未满 START_GRACE_MS 时才算启动中。
+let pageStartedAt = Date.now();
+let pageReadySeen = false;
 let lastKick = 0;
 function kick() {
   const now = Date.now();
@@ -188,6 +196,8 @@ async function resolveThreadInPage(page, lastThread) {
 
 async function injectInto(page) {
   try {
+    pageStartedAt = Date.now();
+    pageReadySeen = false;
     await page.addInitScript({ content: INJECT_SRC });
     // Each cleanup step runs on its own: one failure must not leave the install flag set,
     // otherwise the new script returns early and the page keeps running old code.
@@ -411,17 +421,29 @@ async function openDashboardTab(browser, page) {
     try {
       const missing = await page.evaluate(PROBE_ANCHORS).catch(() => []);
       const resolved = await resolveThreadInPage(page, lastThread).catch(() => ({ id: null, reason: 'unknown' }));
-      // 首页/新对话本来就没有会话容器：只要其它锚点还在、页面上也没有任何消息，
-      // 这就是"空对话"而不是故障（以前一律报 no-anchor，用户会看到橙色故障点）。
+      // 冷启动预热：页面还没渲染出锚点时是"加载中"，不是故障。
+      const warmingUp = missing.length > 0 && !pageReadySeen && Date.now() - pageStartedAt < START_GRACE_MS;
+      // 首页/新对话本来就没有会话容器：只要其它锚点还在、页面上也没有**可见的**消息，
+      // 这就是"空对话"而不是故障。注意必须看可见性——Codex 会把其它会话的隐藏面板留在 DOM 里
+      // （它们有消息节点但宽高为 0），只看"存在"会误判成"这不是空对话"。
       const looksLikeConversation = (resolved.reason === 'empty' && missing.length > 0)
-        ? await page.evaluate(() => !!document.querySelector('[data-local-conversation-final-assistant="true"], [data-content-search-turn-key]')).catch(() => true)
+        ? await page.evaluate(() => {
+            const nodes = document.querySelectorAll('[data-local-conversation-final-assistant="true"], [data-content-search-turn-key]');
+            for (const el of nodes) {
+              const rect = el.getBoundingClientRect();
+              if (rect.width > 0 && rect.height > 0) return true;
+            }
+            return false;
+          }).catch(() => true)
         : false;
       const newChatLike = resolved.reason === 'empty'
         && missing.length > 0
         && missing.every((name) => name === '会话消息容器')
         && !looksLikeConversation;
       health.missingAnchors = newChatLike ? [] : missing;
-      if (missing.length > 0 && !newChatLike) {
+      if (warmingUp) {
+        setHealth('starting', '页面加载中');
+      } else if (missing.length > 0 && !newChatLike) {
         setHealth('no-anchor', '缺少页面锚点: ' + missing.join('、'));
       }
       const thread = resolved.id;
@@ -440,7 +462,10 @@ async function openDashboardTab(browser, page) {
       // 有会话时下面的 data.ok 分支会把状态推回 ok。
       // 只有"锚点齐全"时才把空会话当成正常状态；
       // 锚点缺失是故障，不能被"看起来像空会话"覆盖掉。
-      if (resolved.reason === 'empty' && (missing.length === 0 || newChatLike)) setHealth('empty', '');
+      if (resolved.reason === 'empty' && (missing.length === 0 || newChatLike)) {
+        setHealth('empty', '');
+        pageReadySeen = true;
+      }
       if (thread) {
         data = await metrics.request(thread).catch((error) => {
           log('metrics request failed', error.message);
@@ -451,7 +476,7 @@ async function openDashboardTab(browser, page) {
           lastReason = data.reason;
         }
         if (data.ok) {
-          if (missing.length === 0) setHealth('ok', '');
+          if (missing.length === 0) { setHealth('ok', ''); pageReadySeen = true; }
         } else {
           setHealth('error', data.reason || '指标不可用');
         }

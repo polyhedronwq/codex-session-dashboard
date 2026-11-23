@@ -94,16 +94,17 @@ def page_action(helper, action, arg=None):
 
 
 def wait_visible_bar(helper, timeout=15):
-    deadline = time.time() + timeout
+    started = time.monotonic()
+    deadline = started + timeout
     last = {}
-    while time.time() < deadline:
+    while time.monotonic() < deadline:
         last = page_action(helper, 'state')
         bar = last.get('bar') or {}
         if (read_state() == 'ok' and bar.get('display') != 'none'
                 and (bar.get('width') or 0) >= 200 and bar.get('opacity') == '1'):
-            return True, bar
+            return True, bar, (time.monotonic() - started) * 1000
         time.sleep(0.5)
-    return False, last.get('bar') or last
+    return False, last.get('bar') or last, (time.monotonic() - started) * 1000
 
 
 def main():
@@ -129,9 +130,12 @@ def main():
         else:
             for idx, label in ((1, '第二个'), (2, '第三个')):
                 clicked = page_action(helper, 'click', idx).get('clicked')
-                visible, detail = wait_visible_bar(helper)
+                visible, detail, elapsed_ms = wait_visible_bar(helper)
                 record(f'切到{label}会话后底栏仍在', bool(clicked) and visible,
                        f'clicked={clicked} bar={json.dumps(detail, ensure_ascii=False)}')
+                # P14：切换后 1-2 秒内应出现（旧版空闲 5 秒轮询 + 单次 kick 实测约 5 秒）
+                record(f'切到{label}会话后底栏及时出现（<3s）', bool(clicked) and visible and elapsed_ms < 3000,
+                       f'耗时 {elapsed_ms:.0f}ms')
             # 回到第一个会话，别把调试实例留在测试最后切换的位置
             page_action(helper, 'click', 0)
             wait_visible_bar(helper, timeout=10)

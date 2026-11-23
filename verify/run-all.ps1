@@ -514,6 +514,11 @@ Check '降级链路：锚点消失可见降级、恢复后回正' {
   $LASTEXITCODE -eq 0
 }
 
+Check '冷启动预热（加载中不报故障，超时后仍报故障）' {
+  & $py (Join-Path $verify 'cold-start.py')
+  $LASTEXITCODE -eq 0
+}
+
 Check '底栏跟随面板动画（偏差 < 2px）' {
   & $node (Join-Path $verify 'bar-follow.js')
   $LASTEXITCODE -eq 0

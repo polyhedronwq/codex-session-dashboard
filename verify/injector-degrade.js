@@ -156,6 +156,63 @@ async function waitFor(predicate, timeoutMs) {
     }
   }
 
+  // P14（A2）：新对话页里仍挂着其它会话的隐藏消息节点时，判"空对话"必须看可见性。
+  // 步骤：点「新聊天」→ 等 empty → 摘掉所有会话容器属性（页面上只剩隐藏消息）
+  // → 仍必须判 empty；旧代码会因为有隐藏消息而误报 no-anchor。
+  const clickedNewChat = await page.evaluate(() => {
+    const btn = [...document.querySelectorAll('button')].find((b) => (b.innerText || '').trim() === '新聊天');
+    if (!btn) return false;
+    btn.click();
+    return true;
+  });
+  if (!clickedNewChat) {
+    ok = false;
+    console.log('  FAIL 隐藏会话消息不干扰空对话：找不到「新聊天」按钮');
+  } else {
+    await waitFor(() => readHealth().state === 'empty', 10000);
+    const removedConv = await page.evaluate(() => {
+      const rows = [];
+      for (const el of document.querySelectorAll('[data-response-annotation-conversation]')) {
+        rows.push([el, el.getAttribute('data-response-annotation-conversation')]);
+        el.removeAttribute('data-response-annotation-conversation');
+      }
+      window.__p14ConvRows = rows;
+      return rows.length;
+    });
+    if (removedConv > 0) {
+      await page.evaluate(() => { if (typeof window.__dshBarKick === 'function') window.__dshBarKick(); });
+      let sawFault = false;
+      let sawEmpty = false;
+      for (let i = 0; i < 12; i += 1) {
+        await sleep(400);
+        const st = readHealth().state;
+        if (st === 'no-anchor') { sawFault = true; break; }
+        if (st === 'empty') sawEmpty = true;
+      }
+      if (!sawFault && sawEmpty) {
+        console.log('  PASS 隐藏会话消息不干扰空对话判定');
+      } else {
+        ok = false;
+        console.log(`  FAIL 隐藏会话消息被误判为故障：state=${readHealth().state}`);
+      }
+    } else {
+      ok = false;
+      console.log('  FAIL 隐藏会话消息不干扰空对话：摘除会话容器属性失败');
+    }
+    await page.evaluate(() => {
+      for (const [el, value] of (window.__p14ConvRows || [])) {
+        if (value !== null) el.setAttribute('data-response-annotation-conversation', value);
+      }
+      delete window.__p14ConvRows;
+    }).catch(() => {});
+    const back = await page.evaluate(() => {
+      const el = document.querySelector('[data-app-action-sidebar-thread-id]');
+      if (el) { el.click(); return true; }
+      return false;
+    });
+    if (back) await waitFor(() => readHealth().state === 'ok', 15000);
+  }
+
   await browser.close().catch(() => {});
   process.exit(ok ? 0 : 1);
 })().catch((error) => {

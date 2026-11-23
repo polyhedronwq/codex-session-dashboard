@@ -10,7 +10,7 @@ ROOT = pathlib.Path(__file__).resolve().parent.parent
 # (README 里应出现的写法, 源码里应出现的常量写法, 源码文件)
 CHECKS = [
     ('1000 ms', 'REFRESH_MS = 1000', 'src/bar/injector.js'),
-    ('5000 ms', 'IDLE_REFRESH_MS = 5000', 'src/bar/injector.js'),
+    ('2000 ms', 'IDLE_REFRESH_MS = 2000', 'src/bar/injector.js'),
     ('30 s', 'IDLE_AFTER_MS = 30000', 'src/bar/injector.js'),
     ('60 s', 'writtenAt < 60000', 'src/bar/injector.js'),
     ('4000 ms', 'REFRESH_MS = 4000', 'src/shared/panel.html'),

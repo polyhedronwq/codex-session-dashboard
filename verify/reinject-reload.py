@@ -160,7 +160,7 @@ def main():
                run.returncode == 0 and '已重载 Codex 页面' in output and reloaded,
                f'rc={run.returncode} 输出={output.strip()[:80]} 标记={page_state.get("marker")}')
 
-        # 注入器每轮最长 5 秒推一次数据：再等一会儿看新文档有没有被推过 payload
+        # 注入器每轮最长 2 秒推一次数据：再等一会儿看新文档有没有被推过 payload
         pushed_deadline = time.time() + 15
         while time.time() < pushed_deadline and not page_state.get('pushed'):
             time.sleep(0.5)
@@ -172,7 +172,7 @@ def main():
                     and installed_build == source_build)
         # 重载后注入器要能继续往新文档推数据（__dshBarSig 由注入器每轮 render 写入）
         pushed = bool(page_state.get('pushed'))
-        health_ok = after['state'] in ('ok', 'empty', 'no-anchor', 'error')
+        health_ok = after['state'] in ('ok', 'empty', 'starting', 'no-anchor', 'error')
         record('reload 后重新注入当前构建并继续推数据',
                build_ok and pushed and health_ok,
                f'底栏构建={page_state.get("build")} 安装版={installed_build} 源码={source_build} '
