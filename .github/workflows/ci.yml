@@ -40,13 +40,24 @@ jobs:
         shell: powershell
         run: python verify\test_server.py
 
-      - name: JavaScript 语法
+      - name: JavaScript 语法（全部底栏源码与 verify 脚本）
         shell: powershell
         run: |
-          foreach ($f in @('dist\bar\injected.js', 'dist\bar\injector.js', 'verify\bar-states.js', 'verify\panel-render.js', 'verify\snapshot.js')) {
-            node --check $f
-            if ($LASTEXITCODE -ne 0) { throw "syntax error: $f" }
+          $files = @(Get-ChildItem src\bar -Filter *.js) + @(Get-ChildItem verify -Filter *.js) + @(Get-ChildItem tools -Filter *.js -ErrorAction SilentlyContinue)
+          $bad = @()
+          foreach ($f in $files) {
+            node --check $f.FullName
+            if ($LASTEXITCODE -ne 0) { $bad += $f.Name }
           }
+          if ($bad.Count -gt 0) { $bad | ForEach-Object { Write-Host $_ }; throw 'syntax error' }
+
+      - name: 静态契约（注入器行为 / 文档与代码一致）
+        shell: powershell
+        run: |
+          python verify\injector-contract.py
+          if ($LASTEXITCODE -ne 0) { throw 'injector contract failed' }
+          python verify\test-docs.py
+          if ($LASTEXITCODE -ne 0) { throw 'docs/code mismatch' }
 
       - name: PowerShell 语法与 UTF-8 BOM
         shell: powershell

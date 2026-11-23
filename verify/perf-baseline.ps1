@@ -120,8 +120,8 @@ $md = @"
 $($rows -join "`n")
 | **合计** | **$sumMb MB** |
 
-不含 Codex 自身。额度接口有跨进程磁盘缓存（默认 15 分钟 / 未归属会话 60 分钟），
-所以稳态下网络请求约每 15 分钟一次。
+不含 Codex 自身。额度接口有跨进程磁盘缓存（有值 60 分钟 / 未归属 120 分钟），
+所以稳态下网络请求约每小时一次。
 "@
 [System.IO.File]::WriteAllText($OutFile, $md, (New-Object System.Text.UTF8Encoding($false)))
 Write-Host ''
