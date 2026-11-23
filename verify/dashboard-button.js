@@ -102,6 +102,53 @@ const sleep = (ms) => new Promise((r) => setTimeout(r, ms));
     } else {
       record('底栏/关闭仪表盘标签页后底栏恢复', false, '前提失败：标签页没打开');
     }
+
+    // ---- 断言 3：入口找不到时不能"点了没反应"（亮故障点 + 说明，随后自动恢复） ----
+    const hint = await page.evaluate(async () => {
+      const original = window.__dshOpenDashboard;
+      window.__dshOpenDashboard = () => Promise.resolve(false); // 模拟三层兜底全失败
+      window.__dshOpenDashboard.__saved = original;
+      const dash = document.querySelector('#dsh-bar-root .dsh-dash');
+      if (dash) dash.click();
+      await new Promise((r) => setTimeout(r, 400));
+      const dot = document.getElementById('dsh-health');
+      const state = {
+        dotVisible: !!dot && !dot.classList.contains('hide'),
+        dotBad: !!dot && dot.classList.contains('bad'),
+        dotTitle: dot ? dot.title : '',
+        dashTitle: dash ? dash.title : '',
+      };
+      window.__dshOpenDashboard = original;
+      return state;
+    });
+    record('底栏/入口找不到时给出可见提示',
+      hint.dotVisible && hint.dotBad && hint.dotTitle.includes('入口未找到') && hint.dashTitle.includes('入口未找到'),
+      JSON.stringify(hint));
+
+    // ---- 断言 4：提示会自动消失，不留下永久故障点 ----
+    let cleared = null;
+    let clearedAt = 0;
+    const hintStarted = Date.now();
+    for (let i = 0; i < 40; i += 1) {
+      await sleep(400);
+      cleared = await page.evaluate(() => {
+        const dot = document.getElementById('dsh-health');
+        const dash = document.querySelector('#dsh-bar-root .dsh-dash');
+        return {
+          dotHidden: !!dot && dot.classList.contains('hide'),
+          dotTitle: dot ? dot.title : '',
+          dashTitle: dash ? dash.title : '',
+        };
+      });
+      if (cleared.dotHidden && cleared.dashTitle === '打开会话仪表盘') {
+        clearedAt = Date.now();
+        break;
+      }
+    }
+    record('底栏/入口提示 8 秒后自动消失',
+      !!cleared && cleared.dotHidden && cleared.dashTitle === '打开会话仪表盘'
+      && clearedAt > 0 && (clearedAt - hintStarted) < 15000,
+      JSON.stringify({ hint: cleared, afterMs: clearedAt ? clearedAt - hintStarted : -1 }));
   } catch (error) {
     record('底栏/仪表盘按钮真的打开标签页', false, '异常 ' + (error && error.message ? error.message.split('\n')[0] : error));
   } finally {

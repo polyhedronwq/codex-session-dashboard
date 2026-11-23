@@ -50,6 +50,7 @@ def main():
 REFERENCED = [
     'build.ps1', 'verify/run-all.ps1', 'verify/test_server.py',
     'verify/test-resolver.js', 'verify/perf-baseline.ps1',
+    'verify/post-upgrade.ps1',
     'tools/install.ps1', 'tools/uninstall.ps1',
 ]
 missing = [rel for rel in REFERENCED if not (ROOT / rel).is_file()]

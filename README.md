@@ -120,13 +120,17 @@ build.ps1      src → dist → 发布包（含逐文件 SHA-256 清单）
 ```powershell
 ./build.ps1                          # 构建并同步到本机运行位置
 ./build.ps1 -NoMirror                # 只出 dist
-./verify/run-all.ps1                 # 全量回归（56 项，约 3 分钟）
+./verify/run-all.ps1                 # 全量回归（62 项，约 3 分钟）
 ./verify/run-all.ps1 -Snapshot       # 额外保存截图与数值快照
 ./verify/run-all.ps1 -SkipBar        # 跳过依赖运行中 Codex 的检查
+./verify/post-upgrade.ps1            # Codex 自动升级后的自检（约 40 秒）
 node verify/test-resolver.js         # 会话判定单元测试（8 项）
 python verify/test_server.py         # 解析层单元测试
 ./verify/perf-baseline.ps1           # 生成 docs/PERF.md
 ```
+
+> Codex 桌面版会自动更新。升级后（尤其版本与 `install.ps1` 里记录的验证版本不同时）
+> 先跑 `post-upgrade.ps1`：它只检查最容易被页面结构变化打破的四项，几十秒出结论。
 
 回归覆盖：语法、构建一致性、服务端、消费者契约（按 Codex 的读法校验）、面板渲染与数值对账、底栏三态、会话判定、解析单测、安装器生命周期（隔离 HOME）、性能阈值，以及**真实流程**（像用户一样点开面板，同时监听控制台并截图）。
 

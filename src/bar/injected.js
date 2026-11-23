@@ -450,15 +450,56 @@
     }
   }
 
+  // 点了仪表盘按钮但入口没找到时，不能"点了没反应"——那和按钮坏了没区别（P0 就有这条教训）。
+  // 亮橙色点 + title 写清原因，8 秒后自动消失；之后由正常的 render 恢复。
+  let dashHintUntil = 0;
+  let dashHintTimer = 0;
+  let lastPayload = null;
+  function applyDashHint() {
+    const dot = document.getElementById('dsh-health');
+    const dash = document.querySelector('#dsh-bar-root .dsh-dash');
+    const active = Date.now() < dashHintUntil;
+    if (dash) {
+      dash.title = active
+        ? '仪表盘入口未找到：请在新标签页点「会话仪表盘」'
+        : '打开会话仪表盘';
+    }
+    if (dot && active) {
+      dot.classList.remove('hide');
+      dot.classList.add('bad');
+      dot.title = '仪表盘入口未找到：请在新标签页点「会话仪表盘」';
+    }
+  }
+  function showDashHint() {
+    dashHintUntil = Date.now() + 8000;
+    applyDashHint();
+    // render() 在数据没变时会提前返回，光靠推送不会把提示收回去，必须自己定时重渲染。
+    if (dashHintTimer) clearTimeout(dashHintTimer);
+    dashHintTimer = setTimeout(() => {
+      dashHintTimer = 0;
+      dashHintUntil = 0;
+      if (lastPayload) {
+        window.__dshBarSig = null;
+        render(lastPayload);
+      } else {
+        applyDashHint();
+      }
+    }, 8000);
+  }
+
   function openDashboard() {
     // No "busy" flag here: a click right after a previous one used to be swallowed
     // silently, which reads as "the button stopped working". The injector serialises
     // clicks on its side, so every click is honoured (and toggles as expected).
     if (typeof window.__dshOpenDashboard === 'function') {
-      window.__dshOpenDashboard().catch(() => {});
+      Promise.resolve(window.__dshOpenDashboard()).then((ok) => {
+        if (ok === false) showDashHint();
+      }).catch(() => showDashHint());
       return true;
     }
-    return openDashboardLocal();
+    const ok = openDashboardLocal();
+    if (!ok) showDashHint();
+    return ok;
   }
 
   // Fallback when the injector is unreachable: only toggle between what already exists.
@@ -553,6 +594,7 @@
   function render(data) {
     const root = document.getElementById(ID);
     if (!root) return;
+    lastPayload = data;
     const head = (data && data.summary) || {};
     const sig = JSON.stringify([
       theme(), data && data.ok, head.turns, head.steps,
@@ -588,6 +630,7 @@
         const why = (data && data.health && (data.health.message || data.health.state)) || '暂无数据';
         dot.title = '底栏异常：' + why;
       }
+      applyDashHint();
       return;
     }
     root.style.opacity = '1';
@@ -604,6 +647,7 @@
         dot.title = bad ? ('底栏异常：' + (h.message || h.state)) : '';
       }
     }
+    applyDashHint();
     // Publish the resolved thread for the dashboard panel, which may otherwise receive
     // a "client-new-thread:..." placeholder from the host and render nothing.
     if (data.thread && data.thread.id) {
