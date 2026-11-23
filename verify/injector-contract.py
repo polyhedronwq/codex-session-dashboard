@@ -27,6 +27,18 @@ CHECKS = [
     ('启动参数：调试端口', '--remote-debugging-port=9223' in LAUNCH),
     ('启动参数：强制 IPv4', '--remote-debugging-address=127.0.0.1' in LAUNCH),
     ('injector-only.vbs 指向 injector.js', 'injector.js' in LAUNCHER),
+    # P8：注入失败/连接失败不能静默放弃
+    ('注入失败会记录日志', "log('inject failed'" in INJECTOR),
+    ('页面载入后重新注入', "page.on('domcontentloaded', () => injectInto(page)" in INJECTOR),
+    ('连接失败按退避循环重试', "log('connect failed:'" in INJECTOR and 'setTimeout(resolve, 800)' in INJECTOR),
+    # P8：仪表盘标签页的打开/复用/聚焦/找不到入口四个分支都要留着
+    ('仪表盘标签页：复用/聚焦/隐藏保留/找不到入口',
+     all(marker in INJECTOR for marker in (
+         'dashboard: activated existing tab',
+         'dashboard: shown again (tab was retained)',
+         'dashboard: hidden (tab retained)',
+         'dashboard: no menu item',
+     ))),
 ]
 
 

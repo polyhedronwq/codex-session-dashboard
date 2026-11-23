@@ -494,6 +494,11 @@ Check '会话判定：新对话不得显示旧会话' {
     $true
   }
 
+Check '注入器契约（三地址/文件监听/失败重试/标签页分支）' {
+  & $py (Join-Path $verify 'injector-contract.py')
+  $LASTEXITCODE -eq 0
+}
+
 Check '降级链路：锚点消失可见降级、恢复后回正' {
   & $node (Join-Path $verify 'injector-degrade.js') $installed
   $LASTEXITCODE -eq 0
@@ -609,6 +614,11 @@ Write-Host "        截图目录: $shotsDir"
 
 # ============================================================ J. 用户脚本
 Section 'J. 用户脚本'
+
+Check '用户脚本/安装契约（启动链路/重载/缺依赖/快捷方式）' {
+  & $py (Join-Path $verify 'scripts-contract.py')
+  $LASTEXITCODE -eq 0
+}
 
 Check '用户脚本冒烟（诊断/图标/监视器/-NoMirror）' {
   $args = @()

@@ -134,9 +134,9 @@
 | ok | ✅ |
 | not_found（会话不存在） | ✅ |
 | rollout_missing（会话存在但无路径） | ✅ |
-| 额度有值 / null / partial / unavailable | ⚠️ 只测了结构 |
-| 额度接口超时 → 回退 `—` | ❌ |
-| 缓存命中 / 过期 / 非法 key 不写入 | ⚠️ 只测了 TTL 常量 |
+| 额度有值 / null / partial / unavailable | ✅ 结构 + None 回退 + 渲染两侧都已覆盖 |
+| 额度接口超时 → 回退 `—` | ✅ 超时不外抛，结果写缓存（None 也缓存），payload 里 api=null |
+| 缓存命中 / 过期 / 非法 key 不写入 | ✅ 进程内命中、磁盘命中都不发网络；过期重取；非法 key 不落盘 |
 
 ### 解析的事件类型
 | 类型 | 现状 |
@@ -146,7 +146,7 @@
 | task_started / task_complete | ✅ |
 | turn_context（模型/强度变更） | ✅ |
 | world_state（AGENTS.md 规则） | ✅ |
-| response_item（消息/工具） | ❌ |
+| response_item（消息/工具） | ✅ 钉住设计：工具/正文只认 `event_msg/item_completed`，response_item 并存时不得重复计数 |
 | compacted（压缩次数） | ✅ |
 | 半行 / 截断 / 损坏 JSONL | ✅ |
 
@@ -154,21 +154,21 @@
 
 | 行为 | 现状 |
 | --- | --- |
-| 三地址回退（127.0.0.1 / [::1] / localhost） | ❌ 无断言 |
+| 三地址回退（127.0.0.1 / [::1] / localhost） | ✅ 静态契约（P5 起有，P8 才真正接入套件） |
 | 单实例锁 9224 | ✅ |
 | 重注入（页面 reload 后） | ⚠️ 间接 |
 | health 四种状态 ok/empty/no-anchor/error | ✅ 含 no-anchor 端到端 |
-| 文件监听事件驱动 + 2s 兜底 | ❌ |
-| 仪表盘标签页：打开 / 复用 / 已存在时聚焦 | ❌ |
-| 注入失败时的日志与重试 | ❌ |
+| 文件监听事件驱动 + 2s 兜底 | ✅ 静态契约：`fs.watch` + `fs.watchFile(2000)` 都在 |
+| 仪表盘标签页：打开 / 复用 / 已存在时聚焦 | ⚠️ 四个分支有静态契约；「按钮真的打开标签页」仍是 SKIP（Codex DOM 漂移） |
+| 注入失败时的日志与重试 | ✅ 注入失败有日志、domcontentloaded 重注入、连接失败 800ms 退避 |
 
 ## 六、用户可直接双击的脚本（全部零测试）
 
 | 脚本 | 现状 |
 | --- | --- |
-| `launch.vbs`（带端口启动 Codex） | ⚠️ 仅被安装器调用 |
-| `injector-only.vbs` | ⚠️ 同上 |
-| `start-bar.cmd` | ❌ |
+| `launch.vbs`（带端口启动 Codex） | ✅ 静态契约（端口/IPv4/node 模板/injector/隐藏窗口）；不实跑（会再起一个 Codex） |
+| `injector-only.vbs` | ✅ 静态契约 + 一直被套件用于重启注入器 |
+| `start-bar.cmd` | ✅ 静态契约：必须真的调用 launch.vbs（注释里提到不算） |
 | `stop-bar.cmd` / `stop-bar.ps1` | ✅（-Full） |
 | `stop-watch.cmd` / `watch-windows.ps1` | ✅ |
 | `switch-icon.cmd` / `switch-icon.ps1` | ✅ 黑白往返 |
@@ -181,13 +181,13 @@
 | `install.ps1 -CheckOnly` | ✅ |
 | 全新安装（从 zip） | ⚠️ 手动验过，未进套件 |
 | 覆盖升级（连装两次） | ✅（-Full） |
-| Codex 未运行时安装 | ❌ |
-| 缺 node / 缺 python 的提示路径 | ❌ |
-| 已有 config.toml 内容不被破坏 | ⚠️ 只测了市场源 |
-| 快捷方式创建 | ❌ |
+| Codex 未运行时安装 | ❌ 需要隔离 HOME + 桌面快捷方式，未进套件 |
+| 缺 node / 缺 python 的提示路径 | ✅ 净化环境实跑 -CheckOnly：点名缺 node/python、只读不修改 |
+| 已有 config.toml 内容不被破坏 | ⚠️ 只测了市场源（整包升级另有 -Full 档） |
+| 快捷方式创建 | ✅ 静态契约：桌面+开始菜单两个、wscript 启动 launch.vbs、图标；内容另有 scripts-smoke 断言 |
 | `uninstall.ps1` 完整执行 + 残留 = 0 | ✅（-Full） |
 | `render-paths.ps1` 渲染正确性 | ⚠️ 间接 |
-| `reload-page.js` | ❌ |
+| `reload-page.js` | ⚠️ 交付副本实跑「端口不可达优雅跳过」；真实重载 2026-11-23 手动验过 |
 | `build.ps1 -NoMirror` | ✅ 内容标记验证 |
 | zip 包内容与模板占位符 | ✅ |
 | README 参数与代码一致 | ✅ |
@@ -201,12 +201,12 @@
 | 底栏行为 | 14 | 13 | 1 |
 | 面板结构 | 30 | 30 | 0 |
 | 面板交互 | 8 | 8 | 0 |
-| 服务端方法/分支 | 15 | 14 | 1 |
-| 解析事件类型 | 8 | 7 | 1 |
+| 服务端方法/分支 | 15 | 15 | 0 |
+| 解析事件类型 | 8 | 8 | 0 |
 | 注入器行为 | 7 | 6 | 1 |
-| 用户脚本 | 9 | 5 | 4 |
-| 安装/构建/文档 | 14 | 8 | 6 |
-| **合计** | **121** | **106** | **15** |
+| 用户脚本 | 9 | 8 | 1 |
+| 安装/构建/文档 | 14 | 10 | 4 |
+| **合计** | **121** | **113** | **8** |
 
 ## 九、建议顺序
 
@@ -220,6 +220,7 @@
 | ~~P5~~ | ~~注入器契约、快捷方式内容、文档引用~~ | ✅ 已完成 |
 | ~~P6~~ | ~~面板页签内容、刷新按钮、统计 4 控件、轨迹明细、代理图/链接/消息、异常态文案~~ | ✅ 已完成（16 条断言，均验证过能失败） |
 | ~~P7~~ | ~~底栏文本/大数/分隔符、三个弹窗内容对账、空值、主题、chip 结构~~ | ✅ 已完成（13 条断言，均验证过能失败） |
+| ~~P8~~ | ~~额度缓存/超时、response_item 不重复计数、注入器重试与标签页分支、用户脚本与安装前置检查~~ | ✅ 已完成（14 条断言，均验证过能失败） |
 
 每一条新增断言都要**先制造对应缺陷、确认它 FAIL、再恢复**，否则不算断言。
 
@@ -456,3 +457,64 @@
 - 用户脚本：`launch.vbs`、`injector-only.vbs`、`start-bar.cmd`。
 - 安装器：Codex 未运行安装、缺 node/python 提示、已有 config.toml 内容保留、
   快捷方式创建、`reload-page.js`、README 命令跑通。
+
+## 十八、P8 完成记录（2026-11-23）
+
+补齐数据正确性与生命周期一侧的缺口，套件 52 → **54 项全绿**：
+
+- `verify/test_server.py` +6（额度失败与缓存、response_item 不重复计数）
+- `verify/injector-contract.py` +4（失败日志/重注入/退避重试/标签页四分支）
+- 新增 `verify/scripts-contract.py` 4 条（启动链路、reload-page、缺依赖提示、快捷方式）
+- 把 `injector-contract.py` 接进 `run-all.ps1`
+
+**先说一个 P5 遗留问题**：`injector-contract.py` 从 P5 就存在，但一直没接进 `run-all`，
+那 15 条静态契约从未在回归里跑过——这轮补上（P8 新增 4 条后共 19 条）。
+
+| # | 断言 | 位置 |
+| --- | --- | --- |
+| 1 | 额度接口超时：不外抛、结果（None）写缓存、payload 里 api=null | test_server.py |
+| 2 | 进程内缓存命中不发网络请求 | test_server.py |
+| 3 | 磁盘缓存命中不发网络请求 | test_server.py |
+| 4 | 磁盘缓存过期后必须重新请求 | test_server.py |
+| 5 | response_item 的工具事件不得与 item_completed 重复计数 | test_server.py |
+| 6 | response_item 的消息不得重复计数 | test_server.py |
+| 7 | 注入失败会记录日志 | injector-contract.py |
+| 8 | 页面载入（domcontentloaded）后重新注入 | injector-contract.py |
+| 9 | 连接失败按 800ms 退避循环重试 | injector-contract.py |
+| 10 | 仪表盘标签页：复用/聚焦/隐藏保留/找不到入口四个分支都在 | injector-contract.py |
+| 11 | 启动链路 start-bar.cmd → launch.vbs（调试端口/IPv4/node 模板/injector/隐藏窗口） | scripts-contract.py |
+| 12 | reload-page.js 端口不可达时优雅跳过（实跑死端口） | scripts-contract.py |
+| 13 | install.ps1 -CheckOnly 在缺 node/python 时点名（净化环境实跑） | scripts-contract.py |
+| 14 | 安装器创建桌面+开始菜单快捷方式、wscript 启动 launch.vbs、带图标 | scripts-contract.py |
+
+故障注入验证（8 批，14 条全部命中）：
+
+| 批次 | 注入的故障 | 变红的断言 |
+| --- | --- | --- |
+| 1 | 额度超时异常不再被吞 | test_quota_timeout_falls_back_to_none（ERROR） |
+| 2 | 进程内缓存失效 | test_quota_inprocess_cache_skips_network |
+| 3 | 不读磁盘缓存 | test_quota_disk_cache_skips_network（ERROR） |
+| 4 | 过期判断反转（永远当命中） | test_quota_expired_disk_cache_refetches |
+| 5 | response_item 工具重复计数 | test_response_item_tool_not_double_counted |
+| 6 | response_item 消息重复计数 | test_response_item_message_not_double_counted |
+| 7 | 删掉注入失败日志/重注入/退避/标签页分支 | injector-contract 4 条 |
+| 8 | start-bar 调用改坏 / reload 提示删掉 / 缺 python 不点名 / 快捷方式改名 | scripts-contract 4 条 |
+
+故障脚本：`probe/inject-p8-faults.py`（本机开发目录，不进仓库）。
+
+**过程中修掉的测试自身问题**
+
+1. `injector-contract.py` 没接入 `run-all`（P5 漏的）→ 已接入，否则"有契约文件"等于没测。
+2. 链路断言最初只查 `'launch.vbs' not in start-bar.cmd`，而注释里也提到 launch.vbs——
+   把调用改坏了照样 PASS。改成匹配真实调用 `"%~dp0launch.vbs"` 后才测得出。
+3. 磁盘缓存故障最初整行替换掉 `if shared:`，造成 IndentationError、整个 test_server 直接崩；
+   这种"失败"不代表断言命中。改成 `if False:` 才拿到干净的 FAIL/ERROR。
+4. 手动跑 python 会在 `src/shared/__pycache__` 留字节码，回归的「源码树无编译残留」会红；
+   套件自己设了 `PYTHONDONTWRITEBYTECODE`，手动跑完要清（已清）。
+
+**仍缺口（P9，8 面）**
+
+- 底栏：仪表盘按钮真的打开/聚焦标签页（SKIP，Codex 标签页 DOM 漂移）、chip 悬停显隐（当前动作行常显，不可观测）。
+- 注入器：真实仪表盘标签页打开/复用/聚焦端到端（同上 DOM 限制）。
+- 用户脚本：`launch.vbs` 实跑（会再起一个 Codex，需要隔离环境）。
+- 安装器：全新安装（从 zip）、Codex 未运行安装、已有 config.toml 内容保留、README 命令全跑通。

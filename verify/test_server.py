@@ -277,5 +277,165 @@ class BranchTests(unittest.TestCase):
 
 
 
+class QuotaCacheTests(unittest.TestCase):
+    """P8：额度接口失败/缓存分支——超时必须回退，缓存命中不能白发请求。"""
+
+    THREAD = '11111111-2222-3333-4444-555555555555'
+
+    def setUp(self):
+        import time
+        self.time = time
+        self.tmpdir = tempfile.TemporaryDirectory()
+        self.cache = pathlib.Path(self.tmpdir.name) / 'quota-cache.json'
+        self._orig_file = SRV._QUOTA_CACHE_FILE
+        self._orig_auth = SRV._auth_tokens
+        self._orig_urlopen = SRV.urllib.request.urlopen
+        SRV._QUOTA_CACHE_FILE = self.cache
+        SRV._QUOTA_CACHE.clear()
+        SRV._auth_tokens = lambda: ('fake-access-token', 'fake-account')
+        self.calls = []
+
+    def tearDown(self):
+        SRV.urllib.request.urlopen = self._orig_urlopen
+        SRV._auth_tokens = self._orig_auth
+        SRV._QUOTA_CACHE_FILE = self._orig_file
+        SRV._QUOTA_CACHE.clear()
+        self.tmpdir.cleanup()
+
+    def _urlopen_raises(self, error):
+        def _open(*args, **kwargs):
+            self.calls.append(args)
+            raise error
+        SRV.urllib.request.urlopen = _open
+
+    def _urlopen_payload(self, weekly):
+        class Response:
+            def __init__(self, body):
+                self.body = body
+
+            def read(self):
+                return self.body
+
+            def __enter__(self):
+                return self
+
+            def __exit__(self, *args):
+                return False
+
+        def _open(*args, **kwargs):
+            self.calls.append(args)
+            body = json.dumps({
+                'threads': [{'weekly_limit_percent': weekly, 'five_hour_limit_percent': None,
+                             'data_status': 'partial', 'balance_usage_credits': 1}],
+                'data_as_of': '2026-11-23T00:00:00Z',
+            }).encode('utf-8')
+            return Response(body)
+
+        SRV.urllib.request.urlopen = _open
+
+    def test_quota_timeout_falls_back_to_none(self):
+        self._urlopen_raises(TimeoutError('timed out'))
+        self.assertIsNone(SRV.api_thread_quota(self.THREAD, force=True))
+        self.assertEqual(len(self.calls), 1, '超时只应尝试一次')
+        # 结果写入缓存（None 也缓存），TTL 内不再打网络
+        self.assertIsNone(SRV.api_thread_quota(self.THREAD))
+        self.assertEqual(len(self.calls), 1, '失败结果在 TTL 内应复用，不再请求')
+        # 面板/底栏拿到的令牌是 null，而不是异常
+        summary = SRV.build_summary(SRV.new_state(), [], self.THREAD)
+        self.assertIsNone(summary['quota']['api'])
+
+    def test_quota_inprocess_cache_skips_network(self):
+        result = {'weekly_percent': 3.5, 'five_hour_percent': None, 'data_status': 'partial', 'data_as_of': None}
+        SRV._QUOTA_CACHE[self.THREAD] = (self.time.time(), result)
+        self._urlopen_raises(AssertionError('进程内缓存命中不应发网络请求'))
+        self.assertEqual(SRV.api_thread_quota(self.THREAD), result)
+
+    def test_quota_disk_cache_skips_network(self):
+        self.cache.write_text(json.dumps({
+            self.THREAD: {'ts': self.time.time(), 'result': {'weekly_percent': 7.0}},
+        }), encoding='utf-8')
+        self._urlopen_raises(AssertionError('磁盘缓存命中不应发网络请求'))
+        self.assertEqual(SRV.api_thread_quota(self.THREAD)['weekly_percent'], 7.0)
+
+    def test_quota_expired_disk_cache_refetches(self):
+        self.cache.write_text(json.dumps({
+            self.THREAD: {'ts': self.time.time() - 10 * 3600, 'result': {'weekly_percent': 7.0}},
+        }), encoding='utf-8')
+        self._urlopen_payload(9.5)
+        got = SRV.api_thread_quota(self.THREAD)
+        self.assertEqual(len(self.calls), 1, '过期缓存必须重新请求')
+        self.assertEqual(got['weekly_percent'], 9.5)
+
+
+class ResponseItemTests(unittest.TestCase):
+    """P8：response_item 与 event_msg/item_completed 并存时不能重复计数。
+
+    Codex 的 rollout 里同一个工具调用会同时以 response_item 和 item_completed 出现；
+    仪表盘只认 item_completed。补解析时最容易踩的坑就是把两边都算一遍。
+    """
+
+    def setUp(self):
+        self.tmp = tempfile.NamedTemporaryFile('w', suffix='.jsonl', delete=False, encoding='utf-8')
+        self.tmp.close()
+        self.path = pathlib.Path(self.tmp.name)
+        self.state = SRV.new_state()
+        self._orig_quota = SRV.api_thread_quota
+        SRV.api_thread_quota = lambda *args, **kwargs: None
+
+    def tearDown(self):
+        SRV.api_thread_quota = self._orig_quota
+        try:
+            self.path.unlink()
+        except OSError:
+            pass
+
+    def write(self, *lines):
+        self.path.write_text('\n'.join(lines) + '\n', encoding='utf-8')
+        SRV.read_appended(self.state, self.path)
+
+    def item_completed(self, turn_id, item):
+        return rec('event_msg', {
+            'type': 'item_completed', 'turn_id': turn_id, 'item': item,
+            'started_at_ms': 1000, 'completed_at_ms': 1500,
+        })
+
+    def test_response_item_tool_not_double_counted(self):
+        command = {'type': 'CommandExecution', 'command': ['echo', 'hi'], 'status': 'completed', 'exit_code': 0}
+        self.write(
+            task_started('turn-r'),
+            self.item_completed('turn-r', command),
+            rec('response_item', {'type': 'custom_tool_call', 'name': 'shell', 'input': 'echo hi'}),
+            rec('response_item', {'type': 'function_call', 'name': 'shell', 'arguments': '{}'}),
+            task_complete('turn-r'),
+        )
+        turns = SRV.build_turns(self.state)
+        self.assertEqual(len(turns), 1)
+        self.assertEqual(len(turns[0]['items']), 1, '同一工具只能记一次（只认 item_completed）')
+        self.assertEqual(turns[0]['items'][0]['type'], 'CommandExecution')
+        self.assertEqual(turns[0]['tool_counts'], {'CommandExecution': 1})
+        summary = SRV.build_summary(self.state, turns, 'turn-r')
+        self.assertEqual(summary['footprint']['commands'], 1)
+
+    def test_response_item_message_not_double_counted(self):
+        user = {'type': 'UserMessage', 'content': [{'type': 'text', 'text': '用户正文'}]}
+        agent = {'type': 'AgentMessage', 'content': [{'type': 'text', 'text': '助手正文'}]}
+        self.write(
+            task_started('turn-s'),
+            self.item_completed('turn-s', user),
+            self.item_completed('turn-s', agent),
+            rec('response_item', {'type': 'message', 'role': 'user',
+                                  'content': [{'type': 'input_text', 'text': '用户正文'}]}),
+            rec('response_item', {'type': 'message', 'role': 'assistant',
+                                  'content': [{'type': 'output_text', 'text': '助手正文'}]}),
+            task_complete('turn-s'),
+        )
+        turns = SRV.build_turns(self.state)
+        self.assertEqual(len(turns[0]['items']), 2, '两条消息各记一次')
+        self.assertEqual(turns[0]['user_text'], '用户正文')
+        self.assertEqual(turns[0]['assistant_text'], '助手正文')
+        summary = SRV.build_summary(self.state, turns, 'turn-s')
+        self.assertEqual(summary['user_messages'], 1)
+
+
 if __name__ == '__main__':
     unittest.main(verbosity=2)
