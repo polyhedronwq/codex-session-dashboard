@@ -390,6 +390,11 @@ if ($harnessOk) {
     $LASTEXITCODE -eq 0
   }
 
+  Check '面板契约（页签/刷新/统计/轨迹/代理细则）' {
+    & $node (Join-Path $verify 'panel-contract.js') $probe
+    $LASTEXITCODE -eq 0
+  }
+
 Section 'F. 底栏三态'
 
 $cdpUp = $false
