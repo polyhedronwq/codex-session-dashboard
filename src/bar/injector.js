@@ -322,16 +322,45 @@ async function openDashboardTab(browser, page) {
     return true;
   }
 
-  // Not open. If the launcher is already on screen (a blank tab is showing) use it as is;
-  // only create a tab when there is none. Locators must be :visible — the app keeps the
-  // other tabs' DOM around, and clicking a hidden tab's button silently does nothing.
-  const more = target.locator('button[aria-label="More tools and shortcut options"]:visible').first();
-  let ready = (await more.count()) > 0;
-  if (!ready) {
-    const plus = target.locator('button[aria-label="新标签页"]:visible').first();
-    if (await plus.count()) {
-      await plus.click({ timeout: 3000 }).catch(() => {});
-    } else {
+  // Not open. Codex 26.1120 renders tabs as SPA pages: a blank「新标签页」shows the launcher
+  // cards（会话仪表盘 / 侧边聊天 / 终端 / 新建页面）. The card is the fast, reliable entry;
+  // the old「More tools」菜单只存在于旧构建，不能再拿它作为"启动页就绪"的判据。
+  const stripHiddenNow = async () => target.evaluate(() => !!document.querySelector('button[aria-label="显示标签页"]'))
+    .catch(() => false);
+  const tabLabels = async () => target.evaluate(() => [...document.querySelectorAll('[role="tab"]')]
+    .map((t) => (t.getAttribute('aria-label') || '') || (t.innerText || '').trim())
+    .filter(Boolean)).catch(() => []);
+  const launcherReady = async () => ((await target.locator('button:visible')
+    .filter({ hasText: /^会话仪表盘$/ }).count().catch(() => 0)) > 0);
+  const waitFor = async (check, timeoutMs, stepMs = 100) => {
+    for (let waited = 0; waited < timeoutMs; waited += stepMs) {
+      if (await check()) return true;
+      await target.waitForTimeout(stepMs);
+    }
+    return false;
+  };
+
+  let createdTab = false;
+  const stripWasHidden = await stripHiddenNow();
+  // 标签栏收起时先展开，否则看不到「新标签页」、也点不到启动页卡片。
+  if (stripWasHidden) {
+    await toggleStrip();
+    await target.waitForTimeout(350);
+  }
+
+  let cardsReady = await launcherReady();
+  if (!cardsReady) {
+    // 已经有「新标签页」标签（可能是上次失败留下的）→ 激活它，别重复开新的。
+    if ((await tabLabels()).some((label) => label.includes('新标签页'))) {
+      await target.evaluate(() => {
+        const tab = [...document.querySelectorAll('[role="tab"]')]
+          .find((t) => ((t.getAttribute('aria-label') || '') + (t.innerText || '')).includes('新标签页'));
+        if (tab) tab.click();
+      }).catch(() => {});
+      cardsReady = await waitFor(launcherReady, 1500);
+    }
+    if (!cardsReady) {
+      // 没有可用启动页：Ctrl+T 新建一个（页面聚焦时 CDP keydown 比键盘 API 可靠）
       const cdp = await target.context().newCDPSession(target).catch(() => null);
       if (cdp) {
         const press = async (type) => cdp.send('Input.dispatchKeyEvent', {
@@ -340,65 +369,64 @@ async function openDashboardTab(browser, page) {
         await press('keyDown');
         await press('keyUp');
       } else {
-        await target.keyboard.press('Control+T');
+        await target.keyboard.press('Control+T').catch(() => {});
       }
+      createdTab = true;
+      cardsReady = await waitFor(launcherReady, 5000);
     }
-    for (let attempt = 0; attempt < 45 && !ready; attempt += 1) {
-      await target.waitForTimeout(60);
-      ready = (await more.count()) > 0;
-    }
-  }
-  if (!ready) {
-    log('dashboard: no new-tab page button');
-    return false;
   }
 
-  // 新标签页的启动页本身会列出「会话仪表盘」入口卡片（当前构建）。先直接点卡片：
-  // 走 More 菜单在部分构建里定位不到菜单项，会把用户留在新标签页（历史 bug）。
-  const launcherCard = target.locator('button:visible, [role="button"]:visible, a:visible')
-    .filter({ hasText: /^会话仪表盘$/ }).first();
-  if (await launcherCard.count()) {
-    await launcherCard.click({ timeout: 3000 }).catch(() => {});
-    for (let attempt = 0; attempt < 60; attempt += 1) {
-      await target.waitForTimeout(100);
+  if (cardsReady) {
+    await target.locator('button:visible').filter({ hasText: /^会话仪表盘$/ }).first()
+      .click({ timeout: 3000 }).catch(() => {});
+    if (await waitFor(async () => {
       const now = await readState();
-      if (now && now.count > 0) {
-        log('dashboard: opened from launcher card');
-        return true;
+      return !!(now && now.count > 0);
+    }, 6000)) {
+      log('dashboard: opened from launcher card');
+      return true;
+    }
+  }
+
+  // 旧构建兜底：More 菜单里的「会话仪表盘」菜单项（新构建没有这个菜单）
+  const more = target.locator('button[aria-label="More tools and shortcut options"]:visible').first();
+  if ((await more.count().catch(() => 0)) > 0) {
+    await more.click({ timeout: 3000 }).catch(() => {});
+    let item = null;
+    for (let attempt = 0; attempt < 45 && !item; attempt += 1) {
+      await target.waitForTimeout(60);
+      const menu = target.locator('[role="menu"]:visible').first();
+      if (await menu.count()) {
+        const candidate = menu.getByText('会话仪表盘', { exact: true }).first();
+        if (await candidate.count()) item = candidate;
+      }
+      if (!item) {
+        // 菜单开了但按文案抓不到（图标/嵌套结构差异）：退而找可见菜单项里的同名文字
+        const loose = target.locator('[role="menuitem"]:visible, [role="option"]:visible')
+          .filter({ hasText: '会话仪表盘' }).first();
+        if (await loose.count()) item = loose;
       }
     }
-  }
-
-  await more.click({ timeout: 3000 }).catch(() => {});
-
-  let item = null;
-  for (let attempt = 0; attempt < 45 && !item; attempt += 1) {
-    await target.waitForTimeout(60);
-    const menu = target.locator('[role="menu"]:visible').first();
-    if (await menu.count()) {
-      const candidate = menu.getByText('会话仪表盘', { exact: true }).first();
-      if (await candidate.count()) item = candidate;
-    }
-    if (!item) {
-      // 菜单开了但按文案抓不到（图标/嵌套结构差异）：退而找可见菜单项里的同名文字
-      const loose = target.locator('[role="menuitem"]:visible, [role="option"]:visible')
-        .filter({ hasText: '会话仪表盘' }).first();
-      if (await loose.count()) item = loose;
+    if (item) {
+      await item.click({ timeout: 3000 }).catch(() => {});
+      log('dashboard: opened');
+      return true;
     }
   }
-  if (!item) {
-    log('dashboard: no menu item');
-    // 别把用户留在刚创建的新标签页上：关菜单、关掉空标签页，回到原来的会话。
-    await target.keyboard.press('Escape').catch(() => {});
+
+  log('dashboard: no launcher card / menu item');
+  await target.keyboard.press('Escape').catch(() => {});
+  // 只关掉本次自己新建的空标签页，别动用户原有的新标签页；标签栏恢复原状态。
+  if (createdTab) {
     await target.evaluate(() => {
       const close = document.querySelector('button[aria-label="关闭新标签页标签页"]');
       if (close) close.click();
     }).catch(() => {});
-    return false;
   }
-  await item.click({ timeout: 3000 });
-  log('dashboard: opened');
-  return true;
+  if (stripWasHidden && !(await stripHiddenNow())) {
+    await toggleStrip();
+  }
+  return false;
 }
 
   page.on('domcontentloaded', () => injectInto(page).catch(() => {}));

@@ -130,7 +130,7 @@ if ($node) { Ok "node      $node" } else { Bad 'node'; $missing += 'node' }
 if ($python) { Ok "python    $python" } else { Bad 'python'; $missing += 'python' }
 if ($app) {
   Ok ("Codex     " + $app.Version)
-  if ($app.Version -ne '26.1117.4957.0') { Info '开发时验证的版本是 26.1117.4957.0，版本不同时注入可能失效' }
+  if ($app.Version -ne '26.1120.5083.0') { Info '开发时验证的版本是 26.1120.5083.0，版本不同时注入可能失效' }
 } else { Bad 'Codex 桌面版未安装'; $missing += 'codex' }
 
 $installedVersion = $null

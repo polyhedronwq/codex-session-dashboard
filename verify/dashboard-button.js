@@ -36,6 +36,24 @@ const sleep = (ms) => new Promise((r) => setTimeout(r, ms));
     process.exit(1);
   }
 
+  // 注入器可能刚重启或页面刚 reload：等底栏与打开函数就绪再点，避免把"还没注入"误判成"入口失效"。
+  for (let i = 0; i < 30; i += 1) {
+    const ready = await page.evaluate(() => !!(document.getElementById('dsh-bar-root')
+      && typeof window.__dshOpenDashboard === 'function')).catch(() => false);
+    if (ready) break;
+    await sleep(500);
+  }
+
+  const cdp = await page.context().newCDPSession(page).catch(() => null);
+  const pressKey = async (modifiers, key, code, vk) => {
+    if (!cdp) return;
+    await cdp.send('Input.dispatchKeyEvent', { type: 'keyDown', modifiers, key, code, windowsVirtualKeyCode: vk, nativeVirtualKeyCode: vk });
+    await cdp.send('Input.dispatchKeyEvent', { type: 'keyUp', modifiers, key, code, windowsVirtualKeyCode: vk, nativeVirtualKeyCode: vk });
+  };
+  const stripHidden = () => page.evaluate(() => !!document.querySelector('button[aria-label="显示标签页"]'));
+  const hasNewTabTab = () => page.evaluate(() => [...document.querySelectorAll('[role="tab"]')]
+    .some((t) => ((t.getAttribute('aria-label') || '') + (t.innerText || '')).includes('新标签页')));
+
   const tabState = () => page.evaluate(() => {
     const tabs = [...document.querySelectorAll('[role="tab"]')];
     const dash = tabs.filter((t) => (t.getAttribute('aria-label') || '') === '会话仪表盘'
@@ -149,6 +167,46 @@ const sleep = (ms) => new Promise((r) => setTimeout(r, ms));
       !!cleared && cleared.dotHidden && cleared.dashTitle === '打开会话仪表盘'
       && clearedAt > 0 && (clearedAt - hintStarted) < 15000,
       JSON.stringify({ hint: cleared, afterMs: clearedAt ? clearedAt - hintStarted : -1 }));
+
+    // ---- 断言 5：Codex 26.1120 场景——标签栏收起 + 已有「新标签页」时点仪表盘仍能打开 ----
+    // 用户实测 bug：新构建标签栏默认收起，失败后留下一个新标签页；此时再点仪表盘，
+    // 旧逻辑找不到 More 按钮 → 报「入口未找到」并继续把用户扔在新标签页上。
+    try {
+      for (let i = 0; i < 3; i += 1) {
+        const st = await tabState();
+        if (!st.dashCount) break;
+        await page.evaluate(() => {
+          const close = document.querySelector('button[aria-label="关闭会话仪表盘标签页"]');
+          if (close) close.click();
+        });
+        await sleep(700);
+      }
+      // 标签栏先确保可见（否则看不到 tab），再创建一个新标签页，最后收起标签栏
+      if (await stripHidden()) { await pressKey(10, 'B', 'KeyB', 66); await sleep(800); }
+      if (!(await hasNewTabTab())) { await pressKey(2, 't', 'KeyT', 84); await sleep(1800); }
+      await pressKey(10, 'B', 'KeyB', 66);
+      await sleep(2500);
+      const hiddenOk = await stripHidden();
+      await page.evaluate(() => { const btn = document.querySelector('#dsh-bar-root .dsh-dash'); if (btn) btn.click(); });
+      let openedInHidden = false;
+      let openStateHidden = {};
+      for (let i = 0; i < 44; i += 1) {
+        await sleep(500);
+        openStateHidden = await tabState();
+        if (openStateHidden.dashCount > 0 && openStateHidden.dashActive) { openedInHidden = true; break; }
+      }
+      const stripShownAgain = !(await stripHidden());
+      record('底栏/标签栏收起时点仪表盘仍能打开（新构建场景）',
+        hiddenOk && openedInHidden && stripShownAgain,
+        JSON.stringify({ hiddenOk, openedInHidden, stripShownAgain, tabs: openStateHidden }));
+      await page.evaluate(() => {
+        const close = document.querySelector('button[aria-label="关闭会话仪表盘标签页"]');
+        if (close) close.click();
+      });
+      await sleep(1000);
+    } catch (error) {
+      record('底栏/标签栏收起时点仪表盘仍能打开（新构建场景）', false, '异常: ' + (error && error.message ? error.message.split('\n')[0] : String(error)));
+    }
   } catch (error) {
     record('底栏/仪表盘按钮真的打开标签页', false, '异常 ' + (error && error.message ? error.message.split('\n')[0] : error));
   } finally {

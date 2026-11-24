@@ -230,7 +230,7 @@ python codex-dashboard\probe\render_variants.py
 
 - 面板版在 Codex 内的实际渲染效果（你的原型验证记录里也标注「Actual UI render remains unverified」）。
 - CDP 注入底栏在此版本上的持久性。
-- 当时桌面版 `26.1111.2228.0` 是否与本机 CLI 同版本地带上 `_meta.threadId`（附录 E 已实测通过，当前版本 26.1117.4957.0 同样可用，见 README）。
+- 当时桌面版 `26.1111.2228.0` 是否与本机 CLI 同版本地带上 `_meta.threadId`（附录 E 已实测通过，当前版本 26.1120.5083.0 同样可用，见 README）。
 
 ## 附录 D：外部资料
 
