@@ -17,6 +17,9 @@
   （复现用户这次场景）；点击前先等底栏/打开函数就绪，避免刚安装/重载时误报。
 - 故障注入：把"启动页卡片就绪"改回永远 false → 打开/关闭/新构建三条断言都红（已恢复）。
 - 验证版本常量同步：`install.ps1` 与文档里的 Codex 版本 26.1117 → **26.1120**。
+- 发布流水线：`.github/workflows/release.yml`（tag `v*` 触发）自动构建 zip → 干净 runner 上
+  `-CheckOnly` + `-TestHome` 隔离安装自检 → 建 GitHub Release 上传 zip 与 SHA256；
+  `install.ps1 -TestHome` 现在允许在未安装 Codex 的机器上跑（CI 发布自检用）。
 - 静态契约（`verify/injector-contract.py`）同步新判定：启动页卡片/标签栏展开/复用新标签页/
   只关自己建的空标签页；旧日志串 `dashboard: no menu item` 已改名，修掉 CI 失败。
 

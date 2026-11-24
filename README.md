@@ -54,6 +54,14 @@ Codex 桌面版能看到「这一轮用了多少」，但很难回答另外几�
 | Python | 3.10+（面板服务与指标计算，仅用标准库） |
 | Playwright | `npm i -g playwright`（注入器通过它连接调试端口） |
 
+## 下载
+
+发布包在 [GitHub Releases](https://github.com/polyhedronwq/codex-session-dashboard/releases)：
+
+- 下载 `codex-dashboard-<版本>.zip`，同页有 `SHA256` 校验值
+- **包未签名**：Windows SmartScreen 可能提示"未知发布者"，这是正常的（本机个人工具，无代码签名证书）
+- 每个 Release 的 zip 由 CI 在干净 Windows runner 上构建，并做过隔离安装自检后才上传
+
 ## 安装
 
 1. 解压发布包

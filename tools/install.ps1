@@ -4,7 +4,8 @@
 #   install.ps1 -CheckOnly          只检查，不改任何东西
 #   install.ps1 -Yes                跳过确认
 #   install.ps1 -Yes -TestHome <目录>  测试用：全部产物装进隔离目录，
-#                                    不停止任何服务/进程、不碰调试端口、不碰真实配置与快捷方式
+#                                    不停止任何服务/进程、不碰调试端口、不碰真实配置与快捷方式、
+#                                    不要求已安装 Codex 桌面版（CI 里跑发布包自检用）
 #
 # 安装根目录：%USERPROFILE%\.codex-bar
 #   ├─ *.js / *.vbs / *.py …  底栏
@@ -151,12 +152,21 @@ if ($CheckOnly) {
   exit 0
 }
 
+if ($testMode -and ($missing -contains 'codex')) {
+  Info '测试模式：未安装 Codex 桌面版，跳过该检查'
+  $missing = @($missing | Where-Object { $_ -ne 'codex' })
+}
+
 if ($missing -contains 'codex') {
   Write-Host '没有检测到 Codex 桌面版，无法安装。' -ForegroundColor Red
   exit 1
 }
 
 if ($missing.Count -gt 0) {
+  if ($testMode) {
+    Write-Host ('测试模式缺少依赖: ' + ($missing -join ', ') + '（不做交互安装）') -ForegroundColor Red
+    exit 1
+  }
   if ($missing -contains 'node' -and (Ask-Install 'Node.js')) { Try-Winget 'OpenJS.NodeJS.LTS' 'Node.js'; $node = Find-Node }
   if ($missing -contains 'python' -and (Ask-Install 'Python 3')) { Try-Winget 'Python.Python.3.12' 'Python 3'; $python = Find-Python }
   if (-not $node -or -not $python) {

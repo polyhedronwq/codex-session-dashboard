@@ -997,3 +997,35 @@ Codex 又自动更新到 **26.1120.5083.0**（15:10 安装），新构建把标�
 
 Codex 自动更新是最高频的失效来源：**每次构建变化都可能让"就绪判据"变成死路**。
 以后入口类逻辑尽量用"用户可见结果"（能点到的卡片/能看到的 tab）作为判据，而不是某个按钮的 aria-label。
+
+## 三十一、P22 完成记录（2026-11-24，1.2.1 发布流水线）
+
+之前只能 clone 仓库手动跑 `install.ps1`，没有 tag/Release/附件。现在补齐：
+
+### 改动
+
+| 位置 | 内容 |
+| --- | --- |
+| `.github/workflows/release.yml` | tag `v*` 触发：checkout → 构建 `build.ps1 -NoMirror` → 解压 zip 跑 `-CheckOnly` + `-TestHome` 隔离安装 → 断言关键产物/插件注册/版本 → 生成 SHA256 与 Release 说明 → `gh release create`（已存在则覆盖上传） |
+| `tools/install.ps1` | `-TestHome` 不再要求已安装 Codex（CI 机器没有 Codex）；测试模式缺 node/python 时不交互安装 |
+| README | 新增「下载」小节（Releases 入口、SHA256、未签名说明） |
+
+### 自检链（发布前必须全过）
+
+```
+build.ps1 -NoMirror
+  → Expand-Archive zip
+  → install.ps1 -CheckOnly        # 包完整性（manifest 里 100+ 文件 SHA256）
+  → install.ps1 -TestHome <隔离>   # 全量安装，不碰服务/端口/真实 HOME
+  → 断言 injector/injected/plugin/server/config.toml/plugin.json 版本
+```
+
+### 故障注入
+
+把 `install.ps1` 里 `-TestHome` 的 Codex 豁免删掉，再模拟未安装 Codex 运行
+`-TestHome` → `exit 1`（"没有检测到 Codex 桌面版"）；保留豁免 → `exit 0`。
+
+### 已知限制
+
+- 包**未签名**，SmartScreen 可能提示未知发布者；将来要签名得买证书。
+- Release 流水线在 tag 推送后异步执行，tag 本身先于 Release 出现几分钟。

@@ -1,0 +1,139 @@
+name: Release
+
+# 打 tag（v*）即发版：构建发布包 → 隔离安装自检 → 建 GitHub Release 并上传 zip + SHA256。
+# 也支持手动重跑：tag 已在则覆盖重传（Actions 里 "Re-run jobs" 或 workflow_dispatch）。
+on:
+  push:
+    tags: ['v*']
+  workflow_dispatch:
+
+permissions:
+  contents: write
+
+jobs:
+  release:
+    runs-on: windows-latest
+    env:
+      PYTHONIOENCODING: utf-8
+      GH_TOKEN: ${{ github.token }}
+
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
+
+      - name: 版本与 tag 一致性
+        shell: powershell
+        run: |
+          $v = (Get-Content VERSION -Raw).Trim()
+          $tag = $env:GITHUB_REF_NAME
+          if ($tag -notmatch '^v\d') { $tag = "v$v" }
+          if ($tag -ne "v$v") { throw "tag=$tag 与 VERSION=v$v 不一致：发版前先改 VERSION 再打 tag" }
+          git rev-parse --verify "refs/tags/$tag" | Out-Null
+          if ($LASTEXITCODE -ne 0) { throw "本地没有 tag $tag（请先 git push origin $tag）" }
+          "RELEASE_TAG=$tag" | Out-File -FilePath $env:GITHUB_ENV -Encoding utf8
+
+      - uses: actions/setup-node@v4
+        with:
+          node-version: '22'
+
+      - uses: actions/setup-python@v5
+        with:
+          python-version: '3.12'
+
+      - name: 构建发布包（不渲染本机路径）
+        shell: powershell
+        run: ./build.ps1 -NoMirror
+
+      - name: 发布包隔离安装自检
+        shell: powershell
+        run: |
+          $v = (Get-Content VERSION -Raw).Trim()
+          $zip = Join-Path 'dist-package' "codex-dashboard-$v.zip"
+          if (-not (Test-Path $zip)) { throw '发布包未生成' }
+          if ((Get-Item $zip).Length -lt 50KB) { throw '发布包异常小（<50KB），拒绝发布' }
+
+          $pkg = Join-Path $env:RUNNER_TEMP 'pkg'
+          if (Test-Path $pkg) { Remove-Item $pkg -Recurse -Force }
+          Expand-Archive $zip -DestinationPath $pkg
+          $installer = Join-Path $pkg 'install.ps1'
+
+          # 1) 只读检查：包完整性（SHA256 清单）必须过
+          & powershell -NoProfile -ExecutionPolicy Bypass -File $installer -CheckOnly
+          if ($LASTEXITCODE -ne 0) { throw "install.ps1 -CheckOnly 失败（exit $LASTEXITCODE）" }
+
+          # 2) 隔离安装：全部产物写进临时 HOME，不碰服务/端口/真实配置。
+          #    CI 机器没有 Codex 桌面版，install.ps1 的 -TestHome 已允许跳过该检查。
+          $testHome = Join-Path $env:RUNNER_TEMP 'testhome'
+          if (Test-Path $testHome) { Remove-Item $testHome -Recurse -Force }
+          & powershell -NoProfile -ExecutionPolicy Bypass -File $installer -Yes -TestHome $testHome
+          if ($LASTEXITCODE -ne 0) { throw "install.ps1 -TestHome 失败（exit $LASTEXITCODE）" }
+
+          # 3) 关键产物与插件注册必须存在
+          $required = @(
+            '.codex-bar\injector.js',
+            '.codex-bar\injected.js',
+            '.codex-bar\plugin-market\plugins\session-dashboard\.codex-plugin\plugin.json',
+            '.codex-bar\plugin-market\plugins\session-dashboard\server.py',
+            '.codex\config.toml'
+          )
+          foreach ($rel in $required) {
+            if (-not (Test-Path (Join-Path $testHome $rel))) { throw "缺少安装产物: $rel" }
+          }
+          $cfg = Get-Content (Join-Path $testHome '.codex\config.toml') -Raw -Encoding UTF8
+          if ($cfg -notmatch 'codex-dashboard-local' -or $cfg -notmatch 'session-dashboard') {
+            throw 'config.toml 未注册插件市场/插件'
+          }
+          $plugin = Get-Content (Join-Path $testHome '.codex-bar\plugin-market\plugins\session-dashboard\.codex-plugin\plugin.json') -Raw -Encoding UTF8 | ConvertFrom-Json
+          if ($plugin.version -ne $v) { throw "plugin.json 版本 $($plugin.version) != VERSION $v" }
+
+      - name: 生成发布说明与 SHA256
+        shell: powershell
+        run: |
+          $v = (Get-Content VERSION -Raw).Trim()
+          $zip = Join-Path 'dist-package' "codex-dashboard-$v.zip"
+          $hash = (Get-FileHash $zip -Algorithm SHA256).Hash.ToLower()
+          "$hash  codex-dashboard-$v.zip" | Set-Content "$zip.sha256" -Encoding ascii
+
+          $text = Get-Content CHANGELOG.md -Raw -Encoding UTF8
+          $start = $text.IndexOf("## $v")
+          if ($start -lt 0) { throw "CHANGELOG 缺少 ## $v 段" }
+          $next = $text.IndexOf('## ', $start + 5)
+          $section = if ($next -gt 0) { $text.Substring($start, $next - $start).Trim() } else { $text.Substring($start).Trim() }
+
+          $notes = @(
+            $section,
+            '',
+            '## 安装',
+            '',
+            "1. 下载 codex-dashboard-$v.zip 并解压",
+            '2. 双击 install.cmd（Windows 10/11；需要 Node 18+、Python 3.10+、Playwright）',
+            '3. 用桌面「ChatGPT 仪表盘」快捷方式启动 Codex；Codex 已在运行请先完全退出',
+            '',
+            '> ⚠️ 未签名，SmartScreen 可能提示"未知发布者"；本项目通过 CDP 调试端口工作，只建议在个人机器使用。',
+            '',
+            '## 校验',
+            '',
+            "SHA256: $hash",
+            '',
+            '包内每个文件在安装前都会按 manifest.json 做 SHA256 校验。'
+          ) -join [Environment]::NewLine
+          Set-Content release-notes.md $notes -Encoding utf8
+          Write-Host "SHA256=$hash"
+
+      - name: 创建 / 更新 GitHub Release
+        shell: powershell
+        run: |
+          $v = (Get-Content VERSION -Raw).Trim()
+          $tag = $env:RELEASE_TAG
+          $zip = Join-Path 'dist-package' "codex-dashboard-$v.zip"
+          $sha = "$zip.sha256"
+          $repo = $env:GITHUB_REPOSITORY
+          gh release view $tag --repo $repo | Out-Null
+          if ($LASTEXITCODE -eq 0) {
+            Write-Host "release $tag 已存在：覆盖上传附件并更新说明"
+            gh release upload $tag $zip $sha --clobber --repo $repo
+            gh release edit $tag --notes-file release-notes.md --repo $repo
+          } else {
+            gh release create $tag $zip $sha --title "codex-session-dashboard v$v" --notes-file release-notes.md --verify-tag --repo $repo
+          }
