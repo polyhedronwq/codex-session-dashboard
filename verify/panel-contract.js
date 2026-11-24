@@ -231,12 +231,28 @@ function buildHostHtml(snapshot, paged) {
     "  calls: 0, opens: [], mode: PARAMS.get('mode') || 'ok',",
     "  errorText: PARAMS.get('errorText') || '读取本地会话记录失败，请稍后重试。',",
     "  delay: Number(PARAMS.get('delay') || 0), paged: PARAMS.get('paged') === '1',",
-    '  lastArgs: null, lastFrom: null, fromArgs: [], itemsCalls: 0, lastItemArgs: null,',
+    '  lastArgs: null, lastFrom: null, fromArgs: [], itemsCalls: 0, lastItemArgs: null, pushed: false,',
     '};',
     'const SNAPSHOT = ' + snapshotJs + ';',
     'const PAGED = ' + pagedJs + ';',
     "const frameEl = document.getElementById('frame');",
     "if (PARAMS.get('tab')) frameEl.src = '../src/shared/panel.html#' + PARAMS.get('tab');",
+    'function legacyPushData() {',
+    '  // 1.0.x 服务端的首推格式：只有 total_turns/shown_turns/turn_limit，没有 window_* 字段\n',
+    '  const total = PAGED.turns.length;',
+    '  const start = Math.max(1, total - 59);',
+    '  const turns = PAGED.turns.slice(start - 1).map((t) => Object.assign({}, t));',
+    '  return Object.assign({}, PAGED, { turns, meta: Object.assign({}, PAGED.meta, {',
+    '    total_turns: total, shown_turns: turns.length, turn_limit: 60 }) });',
+    '}',
+    "frameEl.addEventListener('load', () => {",
+    "  if (PARAMS.get('push') !== 'legacy') return;",
+    '  setTimeout(() => {',
+    "    frameEl.contentWindow.postMessage({ jsonrpc: '2.0', method: 'ui/notifications/tool-result',",
+    "      params: { structuredContent: legacyPushData() } }, '*');",
+    '    HOST.pushed = true;',
+    '  }, 220);',
+    '});',
     'function pageData(args) {',
     '  const size = args.count || 30;',
     '  const total = PAGED.turns.length;',
@@ -743,6 +759,37 @@ function buildHostHtml(snapshot, paged) {
       jumped.rows === 70 && jumped.first.includes('第 1 轮')
       && jumped.btnHidden && jumped.topTurn === 1,
       `rows=${jumped.rows} top=${jumped.topTurn}`);
+
+    // ---------- 19. 宿主首推 tool-result：真机首屏走这条，不能只测面板自取 ----------
+    const pushPage = await newPage('?tab=stats&push=legacy&paged=1');
+    const pushFrame = await frameOf(pushPage);
+    const puf = (fn, arg) => pushFrame.evaluate(fn, arg);
+    await pushPage.waitForTimeout(2200);
+    const pushed = await puf(() => ({
+      rows: document.querySelectorAll('#stats-body tr[data-turn]').length,
+      first: ((document.querySelector('#stats-body tr[data-turn]') || {}).innerText || '').replace(/\s+/g, ' ').trim(),
+      summary: document.getElementById('stats-summary').textContent,
+      btnHidden: document.getElementById('opt-turnwindow').classList.contains('hide'),
+    }));
+    const pushHost = await pushPage.evaluate(() => ({
+      calls: window.HOST.calls, pushed: window.HOST.pushed,
+    }));
+    record('面板/宿主推送 首屏由 tool-result 推送驱动、并初始化已加载区间',
+      pushHost.pushed && pushHost.calls === 0
+      && pushed.rows === 60 && pushed.first.includes('第 11 轮')
+      && pushed.summary.includes('已加载第 11–70 轮') && !pushed.btnHidden,
+      `pushed=${pushHost.pushed} calls=${pushHost.calls} rows=${pushed.rows} summary=${pushed.summary.slice(0, 80)}`);
+
+    // 推送初始化后，滚动加载更早仍要能合并出第 1 轮（不能把推送来的 60 轮弄丢）
+    await puf(() => { window.scrollTo(0, 140); });
+    await pushPage.waitForTimeout(1800);
+    const pushedEarlier = await puf(() => ({
+      rows: document.querySelectorAll('#stats-body tr[data-turn]').length,
+      first: ((document.querySelector('#stats-body tr[data-turn]') || {}).innerText || '').replace(/\s+/g, ' ').trim(),
+    }));
+    record('面板/宿主推送 推送之后仍能向上加载并合并出第 1 轮',
+      pushedEarlier.rows === 70 && pushedEarlier.first.includes('第 1 轮'),
+      `rows=${pushedEarlier.rows} first=${pushedEarlier.first.slice(0, 40)}`);
 
     record('面板契约/无脚本错误', pageErrors.length === 0, pageErrors.slice(0, 2).join(' | '));    record('面板契约/无脚本错误', pageErrors.length === 0, pageErrors.slice(0, 2).join(' | '));
   } catch (error) {

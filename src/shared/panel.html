@@ -562,7 +562,7 @@
     }
     data.turns = mergedTurns();
     state.data = data;
-    render(data, opts && opts.force);
+    if (!(opts && opts.defer)) render(data, opts && opts.force);
   }
 
   function getData(options) {
@@ -599,7 +599,7 @@
           }
           return;
         }
-        ingest(data, { force: Boolean(opts.force || opts.earlier !== undefined) });
+        ingest(data, { force: Boolean(opts.force || opts.earlier !== undefined), defer: Boolean(opts.defer) });
       })
       .catch(() => { /* keep the last good view */ });
   }
@@ -653,9 +653,11 @@
       let guard = 0;
       while (state.loadedFrom > 1 && guard < 40) {
         const from = Math.max(1, state.loadedFrom - PAGE_SIZE);
-        await getData({ earlier: from, silent: true, force: true });
+        // 翻页期间不渲染：每页都重建整表会变成 O(n²)（1000 轮实测 6.3 秒）
+        await getData({ earlier: from, silent: true, defer: true });
         guard += 1;
       }
+      render(state.data, true);
     } finally {
       state.loadingEarlier = false;
       updateTurnWindow();
