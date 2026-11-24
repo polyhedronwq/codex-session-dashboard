@@ -31,14 +31,20 @@ CHECKS = [
     ('注入失败会记录日志', "log('inject failed'" in INJECTOR),
     ('页面载入后重新注入', "page.on('domcontentloaded', () => injectInto(page)" in INJECTOR),
     ('连接失败按退避循环重试', "log('connect failed:'" in INJECTOR and 'setTimeout(resolve, 800)' in INJECTOR),
-    # P8：仪表盘标签页的打开/复用/聚焦/找不到入口四个分支都要留着
+    # P8/P20：仪表盘标签页的复用/聚焦/隐藏保留/找不到入口，以及 Codex 26.1120 启动页卡片适配
     ('仪表盘标签页：复用/聚焦/隐藏保留/找不到入口',
      all(marker in INJECTOR for marker in (
          'dashboard: activated existing tab',
          'dashboard: shown again (tab was retained)',
          'dashboard: hidden (tab retained)',
-         'dashboard: no menu item',
+         'dashboard: no launcher card / menu item',
      ))),
+    # P20：26.1120 把入口从 More 菜单改成启动页卡片，标签栏默认收起
+    ('启动页卡片就是就绪判据（新构建）', 'hasText: /^会话仪表盘$/' in INJECTOR),
+    ('标签栏收起时先展开', 'button[aria-label="显示标签页"]' in INJECTOR),
+    ('复用已有的新标签页', "includes('新标签页')" in INJECTOR and 'Control+T' in INJECTOR),
+    ('失败只关本次自己新建的新标签页', '关闭新标签页标签页' in INJECTOR and 'createdTab' in INJECTOR),
+    ('旧构建 More 菜单仍作兜底', 'More tools and shortcut options' in INJECTOR),
 ]
 
 
