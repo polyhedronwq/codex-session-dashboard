@@ -200,6 +200,8 @@ function buildPagingFixture(snapshot) {
   for (let i = 1; i <= 70; i += 1) {
     turns.push(Object.assign({}, base, {
       index: i,
+      user_text: '第 ' + i + ' 轮问题',
+      assistant_text: '第 ' + i + ' 轮回复',
       items: (base.items || []).map((x) => Object.assign({}, x)),
     }));
   }
@@ -231,7 +233,7 @@ function buildHostHtml(snapshot, paged) {
     "  calls: 0, opens: [], mode: PARAMS.get('mode') || 'ok',",
     "  errorText: PARAMS.get('errorText') || '读取本地会话记录失败，请稍后重试。',",
     "  delay: Number(PARAMS.get('delay') || 0), paged: PARAMS.get('paged') === '1',",
-    '  lastArgs: null, lastFrom: null, fromArgs: [], itemsCalls: 0, lastItemArgs: null, pushed: false,',
+    '  lastArgs: null, lastFrom: null, fromArgs: [], itemsCalls: 0, lastItemArgs: null, pushed: false, outlineCalls: 0,',
     '};',
     'const SNAPSHOT = ' + snapshotJs + ';',
     'const PAGED = ' + pagedJs + ';',
@@ -269,6 +271,14 @@ function buildHostHtml(snapshot, paged) {
     '    total_turns: total, shown_turns: turns.length, turn_limit: size,',
     '    window_from: start, window_to: end, has_earlier: start > 1, has_later: end < total }) });',
     '}',
+    'function outlineData() {',
+    '  return Object.assign({}, PAGED, { turns: [], outline: PAGED.turns.map((t) => ({',
+    '    turn: t.index, steps: t.steps, duration_ms: t.duration_ms, running: false,',
+    '    user_preview: String(t.user_text || "").slice(0, 50),',
+    '    assistant_preview: String(t.assistant_text || "").slice(0, 120),',
+    '    preview_truncated: false })),',
+    '    meta: Object.assign({}, PAGED.meta, { total_turns: PAGED.turns.length, shown_turns: 0 }) });',
+    '}',
     'function itemsData(args) {',
     '  const idx = Number(args.items_for);',
     '  const turn = PAGED.turns.find((t) => t.index === idx) || PAGED.turns[0];',
@@ -299,7 +309,8 @@ function buildHostHtml(snapshot, paged) {
     '    }',
     '    let data = SNAPSHOT;',
     '    if (HOST.paged) {',
-    "      if (HOST.lastArgs.view === 'items') { HOST.itemsCalls += 1; HOST.lastItemArgs = HOST.lastArgs; data = itemsData(HOST.lastArgs); }",
+    "      if (HOST.lastArgs.view === 'outline') { HOST.outlineCalls += 1; data = outlineData(); }",
+    "      else if (HOST.lastArgs.view === 'items') { HOST.itemsCalls += 1; HOST.lastItemArgs = HOST.lastArgs; data = itemsData(HOST.lastArgs); }",
     "      else if (HOST.lastArgs.view === 'page') {",
     "        HOST.lastFrom = HOST.lastArgs.from_turn;",
     "        HOST.fromArgs.push(HOST.lastArgs.from_turn === undefined ? null : HOST.lastArgs.from_turn);",
@@ -790,6 +801,59 @@ function buildHostHtml(snapshot, paged) {
     record('面板/宿主推送 推送之后仍能向上加载并合并出第 1 轮',
       pushedEarlier.rows === 70 && pushedEarlier.first.includes('第 1 轮'),
       `rows=${pushedEarlier.rows} first=${pushedEarlier.first.slice(0, 40)}`);
+
+    // ---------- 20. 右侧轮次目录：全量 outline + 点任意轮跳转 + 目录内搜索 ----------
+    const railPage = await newPage('?tab=stats&paged=1');
+    const railFrame = await frameOf(railPage);
+    const rlf = (fn, arg) => railFrame.evaluate(fn, arg);
+    await rlf(() => document.getElementById('opt-rail').click());
+    await railPage.waitForTimeout(1500);
+    const rail = await rlf(() => ({
+      open: document.body.classList.contains('rail-open'),
+      items: document.querySelectorAll('#rail-list .rail-item').length,
+      first: ((document.querySelector('#rail-list .rail-item') || {}).innerText || '').replace(/\s+/g, ' ').trim(),
+      title: document.getElementById('rail-title').textContent,
+    }));
+    const railHost = await railPage.evaluate(() => ({ calls: window.HOST.outlineCalls }));
+    record('面板/目录 打开后拉全量 outline 并列出全部轮次',
+      rail.open && railHost.calls >= 1 && rail.items === 70
+      && rail.first.includes('第 1 轮') && rail.title.includes('70'),
+      `calls=${railHost.calls} items=${rail.items} title=${rail.title}`);
+
+    // 点第 1 轮：要从当前窗口（41–70）一路加载到 1，并把这一轮滚到视口顶部
+    await rlf(() => {
+      const el = [...document.querySelectorAll('#rail-list .rail-item')].find((x) => x.dataset.turn === '1');
+      if (el) el.click();
+    });
+    await railPage.waitForTimeout(2600);
+    const railJump = await rlf(() => {
+      const rows = [...document.querySelectorAll('#stats-body tr[data-turn]')];
+      const firstVisible = rows.find((r) => r.getBoundingClientRect().bottom > 0);
+      return {
+        rows: rows.length,
+        topTurn: firstVisible ? Number(firstVisible.dataset.turn) : null,
+        summary: document.getElementById('stats-summary').textContent,
+      };
+    });
+    record('面板/目录 点第 1 轮后加载到第 1 轮并滚到该行',
+      railJump.rows === 70 && railJump.topTurn === 1 && !railJump.summary.includes('已加载'),
+      `rows=${railJump.rows} top=${railJump.topTurn} summary=${railJump.summary.slice(0, 70)}`);
+
+    // 目录内搜索（对全量 outline 的预览文本做过滤）
+    await rlf(() => {
+      const q = document.getElementById('rail-q');
+      q.value = '第 41 轮问题';
+      q.dispatchEvent(new Event('input', { bubbles: true }));
+    });
+    await railPage.waitForTimeout(300);
+    const railFiltered = await rlf(() => ({
+      items: document.querySelectorAll('#rail-list .rail-item').length,
+      text: document.getElementById('rail-list').innerText,
+      title: document.getElementById('rail-title').textContent,
+    }));
+    record('面板/目录 搜索过滤到匹配轮次',
+      railFiltered.items === 1 && railFiltered.text.includes('第 41 轮') && railFiltered.title.includes('1/70'),
+      `items=${railFiltered.items} title=${railFiltered.title}`);
 
     record('面板契约/无脚本错误', pageErrors.length === 0, pageErrors.slice(0, 2).join(' | '));    record('面板契约/无脚本错误', pageErrors.length === 0, pageErrors.slice(0, 2).join(' | '));
   } catch (error) {

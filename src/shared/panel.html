@@ -230,6 +230,33 @@
   @media (max-width: 1100px) {
     .cards { grid-template-columns: repeat(3, minmax(0, 1fr)); }
   }
+
+  /* 右侧轮次目录（全量 outline，点任意轮跳转；不占内容区滚动位置） */
+  #rail {
+    position: fixed; top: 84px; right: 12px; bottom: 12px; width: 264px;
+    display: none; flex-direction: column; padding: 10px; z-index: 9;
+    background: var(--panel); border: 1px solid var(--line); border-radius: 12px;
+    box-shadow: 0 10px 34px rgba(0, 0, 0, .35);
+  }
+  body.rail-open #rail { display: flex; }
+  body.rail-open .wrap { padding-right: 296px; }
+  #rail .rail-head { display: flex; align-items: center; gap: 8px; margin-bottom: 8px; }
+  #rail .rail-head b { font-size: 12.5px; }
+  #rail #rail-close { margin-left: auto; padding: 1px 7px; line-height: 16px; }
+  #rail .search {
+    width: 100%; box-sizing: border-box; margin-bottom: 8px; padding: 4px 7px;
+    font: inherit; font-size: 12px; color: var(--text); background: transparent;
+    border: 1px solid var(--line); border-radius: 7px;
+  }
+  #rail-list { flex: 1 1 auto; overflow-y: auto; margin: 0 -4px; }
+  .rail-item { padding: 4px 6px; border-radius: 6px; cursor: pointer; font-size: 11.5px; line-height: 1.35; }
+  .rail-item:hover { background: rgba(127, 127, 127, .14); }
+  .rail-item .ri-top { display: flex; gap: 6px; align-items: baseline; }
+  .rail-item .ri-n { font-weight: 600; color: var(--text); }
+  .rail-item .ri-m { margin-left: auto; color: var(--faint); font-variant-numeric: tabular-nums; }
+  .rail-item .ri-p { color: var(--muted); white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
+  .rail-item.loaded .ri-n::after { content: ' ●'; color: #53b559; font-size: 9px; vertical-align: 1px; }
+  #stats-body tr.flash td, .trow.flash { background: rgba(83, 181, 89, .16); }
 </style>
 </head>
 <body>
@@ -241,9 +268,16 @@
     <span class="chip" id="auto">自动刷新 4s</span>
     <span class="grow"></span>
     <span class="sub" id="updated"></span>
+    <button id="opt-rail" title="打开全量轮次目录">目录</button>
     <button id="opt-turnwindow" class="hide" title="向上加载到第 1 轮">跳到第 1 轮</button>
     <button id="refresh">刷新</button>
   </header>
+
+  <aside id="rail" aria-label="轮次目录">
+    <div class="rail-head"><b id="rail-title">轮次目录</b><button id="rail-close" title="关闭目录">×</button></div>
+    <input id="rail-q" class="search" placeholder="搜索轮次 / 预览…">
+    <div id="rail-list"></div>
+  </aside>
 
   <div class="tabs">
     <button class="tab on" data-tab="overview">概览</button>
@@ -379,6 +413,7 @@
   const state = {
     data: null, tab: 'overview', expanded: new Set(), all: false, sig: '', threadId: null,
     turnsByIndex: new Map(), loadedFrom: 0, loadedTo: 0, loadingEarlier: false,
+    outline: null, outlineTotal: 0, railQuery: '',
     attempted: new Set(), traceOpen: new Set(), query: '',
     openRec: null, detailTurns: new Set(), detailPending: new Set(), foldedGroups: new Set(),
     opts: { total: false, events: false, delta: false, ctxMode: 'latest', foldCalls: true },
@@ -563,6 +598,7 @@
     data.turns = mergedTurns();
     state.data = data;
     if (!(opts && opts.defer)) render(data, opts && opts.force);
+    renderRail();
   }
 
   function getData(options) {
@@ -570,7 +606,9 @@
     const args = {};
     const threadId = state.threadId || storedThreadId();
     if (threadId) args.thread_id = threadId;
-    if (opts.itemsFor !== undefined) {
+    if (opts.outline) {
+      args.view = 'outline';
+    } else if (opts.itemsFor !== undefined) {
       // 单轮明细：只取这一轮，直接补进已加载数据，不动窗口
       args.view = 'items';
       args.items_for = opts.itemsFor;
@@ -589,6 +627,12 @@
             const text = (result && result.content && result.content[0] && result.content[0].text) || '没有数据';
             showError(text);
           }
+          return;
+        }
+        if (opts.outline) {
+          state.outline = data.outline || [];
+          state.outlineTotal = ((data.meta || {}).total_turns) || state.outline.length;
+          renderRail(true);
           return;
         }
         if (opts.itemsFor !== undefined) {
@@ -644,16 +688,58 @@
     }
   }
 
-  async function jumpToFirst() {
-    if (state.loadingEarlier || state.loadedFrom <= 1) return;
+  let railSig = '';
+
+  function renderRail(force) {
+    if (!state.outline) return;
+    const sig = `${state.outline.length}|${state.loadedFrom}|${state.loadedTo}|${state.railQuery}`;
+    if (!force && sig === railSig) return;
+    railSig = sig;
+    const q = state.railQuery.trim().toLowerCase();
+    const items = state.outline.filter((o) => {
+      if (!q) return true;
+      const hay = `第 ${o.turn} 轮 ${o.user_preview || ''} ${o.assistant_preview || ''}`.toLowerCase();
+      return hay.includes(q);
+    });
+    $('rail-title').textContent = `轮次目录 ${items.length}/${state.outline.length}`;
+    $('rail-list').innerHTML = items.map((o) => {
+      const loaded = o.turn >= state.loadedFrom && o.turn <= state.loadedTo;
+      return `<div class="rail-item${loaded ? ' loaded' : ''}" data-turn="${o.turn}">
+        <div class="ri-top"><span class="ri-n">第 ${o.turn} 轮</span><span class="ri-m">${o.steps ?? 0} 步 · ${fmtDur(o.duration_ms)}</span></div>
+        <div class="ri-p">${esc(o.user_preview || '（无用户消息）')}</div>
+      </div>`;
+    }).join('') || '<div class="empty">没有匹配的轮次</div>';
+  }
+
+  function loadOutline() {
+    return getData({ outline: true, silent: true });
+  }
+
+  function toggleRail(force) {
+    const open = force === undefined ? !document.body.classList.contains('rail-open') : Boolean(force);
+    document.body.classList.toggle('rail-open', open);
+    $('opt-rail').classList.toggle('on', open);
+    if (open) {
+      if (!state.outline) loadOutline();
+      else renderRail(true);
+    }
+  }
+
+  async function jumpToTurn(target) {
+    const total = state.outlineTotal || turnTotals(state.data).total || 0;
+    const turn = Math.max(1, Math.min(Number(target) || 1, Math.max(total, 1)));
+    if (state.tab !== 'stats' && state.tab !== 'trace') {
+      state.tab = 'stats';
+      document.querySelectorAll('.tab').forEach((b) => b.classList.toggle('on', b.dataset.tab === 'stats'));
+      if (state.data) render(state.data, true);
+    }
     state.loadingEarlier = true;
     updateTurnWindow();
     try {
-      // 逐页往回取，保持"已加载区间连续"，最多 40 页兜底
       let guard = 0;
-      while (state.loadedFrom > 1 && guard < 40) {
-        const from = Math.max(1, state.loadedFrom - PAGE_SIZE);
-        // 翻页期间不渲染：每页都重建整表会变成 O(n²)（1000 轮实测 6.3 秒）
+      // 逐页往回取到包含目标轮次，期间不渲染（避免每页重建整表的 O(n²)）
+      while (state.loadedFrom > turn && guard < 40) {
+        const from = Math.max(turn, state.loadedFrom - PAGE_SIZE);
         await getData({ earlier: from, silent: true, defer: true });
         guard += 1;
       }
@@ -663,9 +749,19 @@
       updateTurnWindow();
     }
     const sel = activeListSelector();
-    const row = sel && [...document.querySelectorAll(sel)].find((r) => Number(r.dataset.turn) === 1);
-    if (row) row.scrollIntoView({ block: 'start' });
-    else window.scrollTo(0, 0);
+    const row = sel && [...document.querySelectorAll(sel)].find((r) => Number(r.dataset.turn) === turn);
+    if (row) {
+      row.scrollIntoView({ block: 'start' });
+      row.classList.add('flash');
+      setTimeout(() => row.classList.remove('flash'), 1200);
+    } else {
+      window.scrollTo(0, 0);
+    }
+    renderRail(true);
+  }
+
+  async function jumpToFirst() {
+    await jumpToTurn(1);
   }
 
   // 滚动到顶部附近 -> 自动加载更早的一页（节流到每帧一次）
@@ -1277,6 +1373,16 @@
   });
 
   $('opt-turnwindow').addEventListener('click', () => { jumpToFirst(); });
+  $('opt-rail').addEventListener('click', () => toggleRail());
+  $('rail-close').addEventListener('click', () => toggleRail(false));
+  $('rail-list').addEventListener('click', (event) => {
+    const item = event.target.closest('.rail-item[data-turn]');
+    if (item) jumpToTurn(Number(item.dataset.turn));
+  });
+  $('rail-q').addEventListener('input', (event) => {
+    state.railQuery = event.target.value;
+    renderRail();
+  });
 
   $('refresh').addEventListener('click', () => {
     $('refresh').textContent = '刷新中…';
@@ -1371,7 +1477,13 @@
 const ACTIVE_MS = REFRESH_MS;        // 4000
 const IDLE_MS = 30000;
 const tick = () => {
-  if (!document.hidden && state.threadId) getData({ lite: true, silent: true });
+  if (!document.hidden && state.threadId) {
+    getData({ lite: true, silent: true });
+    if (document.body.classList.contains('rail-open')) {
+      const total = ((state.data && state.data.meta) || {}).total_turns || 0;
+      if (total && (!state.outline || state.outline.length < total)) loadOutline();
+    }
+  }
   const running = !!(state.data && state.data.summary && state.data.summary.running);
   setTimeout(tick, running ? ACTIVE_MS : IDLE_MS);
 };
