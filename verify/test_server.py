@@ -461,5 +461,47 @@ class WindowTests(unittest.TestCase):
         self.assertIn(3, [t['index'] for t in shown])
 
 
+class PageViewTests(unittest.TestCase):
+    """P17：分页窗口（page）与全量轻量目录（outline）。"""
+
+    def turns(self, n=79):
+        return [{'index': i, 'steps': i % 5, 'user_text': ('u' * i), 'assistant_text': ('a' * i),
+                 'duration_ms': 1000 + i, 'running': False} for i in range(1, n + 1)]
+
+    def test_page_tail_default(self):
+        shown, window = SRV.page_turns(self.turns(), from_turn=None, count=30)
+        self.assertEqual(len(shown), 30)
+        self.assertEqual(window['from'], 50)
+        self.assertEqual(window['to'], 79)
+        self.assertTrue(window['has_earlier'])
+        self.assertFalse(window['has_later'])
+
+    def test_page_middle_flags(self):
+        shown, window = SRV.page_turns(self.turns(), from_turn=11, count=30)
+        self.assertEqual(window['from'], 11)
+        self.assertEqual(window['to'], 40)
+        self.assertTrue(window['has_earlier'])
+        self.assertTrue(window['has_later'])
+        self.assertEqual(shown[0]['index'], 11)
+
+    def test_page_clamps(self):
+        _, w0 = SRV.page_turns(self.turns(), from_turn=0, count=30)
+        self.assertEqual(w0['from'], 1)
+        _, w9 = SRV.page_turns(self.turns(), from_turn=999, count=30)
+        self.assertEqual(w9['to'], 79)
+        self.assertGreaterEqual(w9['from'], 50)
+        _, wc = SRV.page_turns(self.turns(), from_turn=1, count=999)
+        self.assertEqual(wc['to'], SRV.PAGE_COUNT_MAX)
+
+    def test_outline_is_light_and_complete(self):
+        outline = SRV.build_outline(self.turns())
+        self.assertEqual(len(outline), 79)
+        first = outline[0]
+        self.assertEqual(first['turn'], 1)
+        self.assertLessEqual(len(first['user_preview']), SRV.OUTLINE_PROMPT_LIMIT)
+        self.assertLessEqual(len(first['assistant_preview']), SRV.OUTLINE_RESPONSE_LIMIT)
+        self.assertTrue(first['preview_truncated'] is False)
+
+
 if __name__ == '__main__':
     unittest.main(verbosity=2)

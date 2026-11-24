@@ -139,6 +139,10 @@ DB_PATH = CODEX_HOME / 'state_5.sqlite'
 URI = 'ui://session-dashboard/dashboard.html'
 MAX_TURNS = 60
 MAX_ITEMS = 80
+PAGE_COUNT_DEFAULT = 30   # 面板分页一页多少轮（实测 ~92 KB，不含明细）
+PAGE_COUNT_MAX = 60       # 一次最多取多少轮，防大请求
+OUTLINE_PROMPT_LIMIT = 50    # 预览：对齐 DSH turnOutline（1 行 prompt）
+OUTLINE_RESPONSE_LIMIT = 120  # 预览：3 行回复
 MAX_READERS = 4
 
 TOOL_LABELS = {
@@ -895,7 +899,10 @@ def subagent_graph(thread_id, main_tokens):
 
 
 def window_turns(turns, limit=None, focus=None):
-    """取轮次窗口：默认最近 MAX_TURNS；limit<=0 取全部；focus 保证被展开的轮次在窗口内。"""
+    """取轮次窗口：默认最近 MAX_TURNS；limit<=0 取全部；focus 保证被展开的轮次在窗口内。
+
+    这是 1.0.x 的旧语义，保留给旧面板/旧参数兼容；新面板用 page_turns。
+    """
     total = len(turns)
     lim = MAX_TURNS if limit is None else int(limit)
     if focus is not None:
@@ -906,7 +913,53 @@ def window_turns(turns, limit=None, focus=None):
     return list(turns[-lim:]), total, lim
 
 
-def payload_for(thread_id, limit=None, focus=None):
+def page_turns(turns, from_turn=None, count=None):
+    """按 1-based 轮次号取一页；from_turn 缺省取尾部 count 轮。
+
+    返回 (shown, window) —— window 里带 from/to/total/has_earlier/has_later，
+    面板据此决定"还能不能往上加载"和标注区间。
+    """
+    total = len(turns)
+    size = PAGE_COUNT_DEFAULT if count is None else int(count)
+    size = max(1, min(size, PAGE_COUNT_MAX))
+    if from_turn is None or from_turn == 'tail':
+        end = total
+        start = max(1, total - size + 1)
+    else:
+        start = max(1, min(int(from_turn), total + 1))
+        end = min(total, start + size - 1)
+    if start > total:  # 会话变短/轮次被裁剪后仍可能越界
+        start = max(1, total - size + 1)
+        end = total
+    window = {
+        'from': start if total else 0,
+        'to': end,
+        'total': total,
+        'has_earlier': start > 1,
+        'has_later': end < total,
+    }
+    return list(turns[start - 1:end]), window
+
+
+def build_outline(turns):
+    """全量轻量目录：每轮只带编号/步数/耗时/两段预览（DSH turnOutline 的等价物）。"""
+    outline = []
+    for turn in turns:
+        text = (turn.get('user_text') or '').strip()
+        reply = (turn.get('assistant_text') or '').strip()
+        outline.append({
+            'turn': turn.get('index'),
+            'steps': turn.get('steps'),
+            'duration_ms': turn.get('duration_ms'),
+            'running': bool(turn.get('running')),
+            'user_preview': text[:OUTLINE_PROMPT_LIMIT],
+            'assistant_preview': reply[:OUTLINE_RESPONSE_LIMIT],
+            'preview_truncated': len(text) > OUTLINE_PROMPT_LIMIT or len(reply) > OUTLINE_RESPONSE_LIMIT,
+        })
+    return outline
+
+
+def payload_for(thread_id, limit=None, focus=None, view=None, from_turn=None, count=None):
     row = thread_row(thread_id)
     if row is None:
         return {'ok': False, 'reason': 'not_found', 'thread_id': thread_id}
@@ -925,7 +978,29 @@ def payload_for(thread_id, limit=None, focus=None):
     turns = build_turns(state)
     summary = build_summary(state, turns, thread_id)
     summary['subagents'] = subagent_graph(thread_id, (summary.get('total') or {}).get('total_tokens'))
-    shown, total_turns, turn_limit = window_turns(turns, limit, focus)
+    outline = None
+    window = None
+    if view == 'outline':
+        outline = build_outline(turns)
+        shown, total_turns, turn_limit = [], len(turns), 0
+    elif view == 'items':
+        total_turns = len(turns)
+        turn_limit = 0
+        target = next((item for item in turns if item.get('index') == focus), None)
+        shown = [target] if target is not None else []
+        window = {'from': focus, 'to': focus, 'total': total_turns,
+                  'has_earlier': False, 'has_later': False}
+    elif view == 'page':
+        shown, window = page_turns(turns, from_turn=from_turn, count=count)
+        total_turns = window['total']
+        turn_limit = len(shown)
+    else:
+        shown, total_turns, turn_limit = window_turns(turns, limit, focus)
+    if window is None:
+        first = shown[0].get('index') if shown else 0
+        last = shown[-1].get('index') if shown else 0
+        window = {'from': first, 'to': last, 'total': total_turns,
+                  'has_earlier': first > 1, 'has_later': last < total_turns}
     return {
         'ok': True,
         'thread': {
@@ -938,14 +1013,19 @@ def payload_for(thread_id, limit=None, focus=None):
         },
         'summary': summary,
         'turns': shown,
+        'outline': outline,
         'meta': {
             'parse_errors': state['parse_errors'],
             'file_bytes': state['offset'],
             'generated_at': datetime.datetime.now(datetime.timezone.utc).isoformat(),
-            # 面板据此显示"共 N 轮 / 显示最近 M 轮"并给"显示全部"按钮，不再把窗口当总数
+            # 面板据此显示"共 N 轮 / 已加载第 X–Y 轮"、决定能否继续向上加载
             'total_turns': total_turns,
             'shown_turns': len(shown),
             'turn_limit': turn_limit,
+            'window_from': window['from'],
+            'window_to': window['to'],
+            'has_earlier': window['has_earlier'],
+            'has_later': window['has_later'],
         },
     }
 
@@ -959,8 +1039,13 @@ TOOL = {
         'type': 'object',
         'properties': {
             'thread_id': {'type': 'string', 'description': 'Optional explicit thread UUID; defaults to the current conversation.'},
+            'view': {'type': 'string', 'enum': ['page', 'outline', 'items'],
+                     'description': 'page: one window of turns; outline: lightweight directory of all turns; '
+                                    'items: step items of one turn (requires items_for). Omit for legacy tail window.'},
+            'from_turn': {'type': 'integer', 'description': '1-based first turn of a page; omit for the tail page.'},
+            'count': {'type': 'integer', 'description': 'Turns per page (1..60, default 30).'},
             'turns_limit': {'type': 'integer',
-                            'description': 'How many recent turns to return; 0 means all. Defaults to 60.'},
+                            'description': 'Legacy: how many recent turns to return; 0 means all. Defaults to 60.'},
             'items_for': {'type': 'integer',
                           'description': 'Only include step items for this 1-based turn index (used to expand one row).'},
             'include_items': {'type': 'boolean', 'description': 'Set false to return turn summaries without step items.'},
@@ -996,8 +1081,22 @@ def dashboard_result(params):
         turns_limit = int(turns_limit) if turns_limit is not None else None
     except (TypeError, ValueError):
         turns_limit = None
+    view = args.get('view')
+    if view not in ('page', 'outline', 'items'):
+        view = None
+    from_turn = args.get('from_turn')
     try:
-        data = payload_for(thread_id, limit=turns_limit, focus=items_for)
+        from_turn = int(from_turn) if from_turn is not None else None
+    except (TypeError, ValueError):
+        from_turn = None
+    count = args.get('count')
+    try:
+        count = int(count) if count is not None else None
+    except (TypeError, ValueError):
+        count = None
+    try:
+        data = payload_for(thread_id, limit=turns_limit, focus=items_for,
+                           view=view, from_turn=from_turn, count=count)
     except (OSError, sqlite3.Error):
         return {
             'content': [{'type': 'text', 'text': '读取本地会话记录失败，请稍后重试。'}],

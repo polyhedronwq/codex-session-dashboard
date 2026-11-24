@@ -241,7 +241,7 @@
     <span class="chip" id="auto">自动刷新 4s</span>
     <span class="grow"></span>
     <span class="sub" id="updated"></span>
-    <button id="opt-turnwindow" class="hide" title="加载更早的轮次">显示全部轮次</button>
+    <button id="opt-turnwindow" class="hide" title="向上加载到第 1 轮">跳到第 1 轮</button>
     <button id="refresh">刷新</button>
   </header>
 
@@ -377,12 +377,14 @@
 <script>
 (() => {
   const state = {
-    data: null, tab: 'overview', expanded: new Set(), all: false, sig: '', threadId: null, limit: null,
+    data: null, tab: 'overview', expanded: new Set(), all: false, sig: '', threadId: null,
+    turnsByIndex: new Map(), loadedFrom: 0, loadedTo: 0, loadingEarlier: false,
     attempted: new Set(), traceOpen: new Set(), query: '',
     openRec: null, detailTurns: new Set(), detailPending: new Set(), foldedGroups: new Set(),
     opts: { total: false, events: false, delta: false, ctxMode: 'latest', foldCalls: true },
   };
   const REFRESH_MS = 4000;
+  const PAGE_SIZE = 30;   // 与 server PAGE_COUNT_DEFAULT 对齐（实测 ~92 KB/页，不含明细）
   let nextId = 1;
   const pending = new Map();
   let initialized = false;
@@ -463,7 +465,7 @@
     }
     if (msg.method === 'ui/notifications/tool-result') {
       const sc = msg.params && msg.params.structuredContent;
-      if (sc) render(sc);
+      if (sc) ingest(sc, { force: true });
     }
     if (msg.method === 'ui/notifications/host-context-changed') {
       const theme = msg.params && msg.params.theme;
@@ -535,16 +537,50 @@
     }
   }
 
+  function mergedTurns() {
+    return [...state.turnsByIndex.values()].sort((a, b) => a.index - b.index);
+  }
+
+  function mergeTurn(turn) {
+    const old = state.turnsByIndex.get(turn.index);
+    const merged = old ? Object.assign({}, old, turn) : Object.assign({}, turn);
+    // 刷新/翻页回来的轮次不带明细时，保留已经展开过的 items
+    if (old && old.items && old.items.length && !(turn.items && turn.items.length)) merged.items = old.items;
+    state.turnsByIndex.set(turn.index, merged);
+  }
+
+  // 一页（或宿主首推的旧版整包）到达：合并进 state，刷新已加载区间，再渲染。
+  function ingest(data, opts) {
+    const page = data.turns || [];
+    for (const turn of page) mergeTurn(turn);
+    const meta = data.meta || {};
+    if (page.length) {
+      const from = meta.window_from || page[0].index;
+      const to = meta.window_to || page[page.length - 1].index;
+      state.loadedFrom = state.loadedFrom ? Math.min(state.loadedFrom, from) : from;
+      state.loadedTo = state.loadedTo ? Math.max(state.loadedTo, to) : to;
+    }
+    data.turns = mergedTurns();
+    state.data = data;
+    render(data, opts && opts.force);
+  }
+
   function getData(options) {
     const opts = options || {};
     const args = {};
     const threadId = state.threadId || storedThreadId();
     if (threadId) args.thread_id = threadId;
-    const limit = opts.limit !== undefined ? opts.limit : state.limit;
-    if (limit !== null) args.turns_limit = limit;
-    if (opts.itemsFor) args.items_for = opts.itemsFor;
-    else if (opts.lite || limit === 0) args.include_items = false;
-    if (opts.details) args.include_details = true;
+    if (opts.itemsFor !== undefined) {
+      // 单轮明细：只取这一轮，直接补进已加载数据，不动窗口
+      args.view = 'items';
+      args.items_for = opts.itemsFor;
+      if (opts.details) args.include_details = true;
+    } else {
+      args.view = 'page';
+      args.count = PAGE_SIZE;
+      args.include_items = false;
+      if (opts.earlier !== undefined) args.from_turn = opts.earlier;
+    }
     return request('tools/call', { name: 'show_session_dashboard', arguments: args })
       .then((result) => {
         const data = result && result.structuredContent;
@@ -555,19 +591,94 @@
           }
           return;
         }
-        if ((opts.lite || opts.itemsFor) && state.data) {
-          const previous = new Map(state.data.turns.map((t) => [t.index, t]));
-          for (const turn of data.turns) {
-            const old = previous.get(turn.index);
-            if (old && old.items && old.items.length && !(turn.items && turn.items.length)) {
-              turn.items = old.items;
-            }
+        if (opts.itemsFor !== undefined) {
+          for (const turn of data.turns || []) mergeTurn(turn);
+          if (state.data) {
+            state.data.turns = mergedTurns();
+            render(state.data, true);
           }
+          return;
         }
-        render(data, opts.force);
+        ingest(data, { force: Boolean(opts.force || opts.earlier !== undefined) });
       })
       .catch(() => { /* keep the last good view */ });
   }
+
+  function activeListSelector() {
+    if (!document.getElementById('stats').classList.contains('hide')) return '#stats-body tr[data-turn]';
+    if (!document.getElementById('trace').classList.contains('hide')) return '#trace-list .trow[data-turn]';
+    return null;
+  }
+
+  // 记录当前视口顶部的那一行（轮次 + 屏幕位置），用于"往上插入后把视线钉回同一轮"。
+  function captureAnchor() {
+    const sel = activeListSelector();
+    if (!sel) return null;
+    const row = [...document.querySelectorAll(sel)].find((r) => r.getBoundingClientRect().bottom > 0);
+    if (!row) return null;
+    return { turn: Number(row.dataset.turn), top: row.getBoundingClientRect().top };
+  }
+
+  function restoreAnchor(anchor) {
+    if (!anchor) return;
+    const sel = activeListSelector();
+    if (!sel) return;
+    const row = [...document.querySelectorAll(sel)].find((r) => Number(r.dataset.turn) === anchor.turn);
+    if (!row) return;
+    const delta = row.getBoundingClientRect().top - anchor.top;
+    if (Math.abs(delta) > 1) window.scrollBy(0, delta);
+  }
+
+  async function loadEarlier() {
+    if (state.loadingEarlier || state.loadedFrom <= 1) return;
+    state.loadingEarlier = true;
+    updateTurnWindow();
+    const anchor = captureAnchor();
+    const from = Math.max(1, state.loadedFrom - PAGE_SIZE);
+    try {
+      await getData({ earlier: from, silent: true, force: true });
+    } finally {
+      state.loadingEarlier = false;
+      updateTurnWindow();
+      restoreAnchor(anchor);
+    }
+  }
+
+  async function jumpToFirst() {
+    if (state.loadingEarlier || state.loadedFrom <= 1) return;
+    state.loadingEarlier = true;
+    updateTurnWindow();
+    try {
+      // 逐页往回取，保持"已加载区间连续"，最多 40 页兜底
+      let guard = 0;
+      while (state.loadedFrom > 1 && guard < 40) {
+        const from = Math.max(1, state.loadedFrom - PAGE_SIZE);
+        await getData({ earlier: from, silent: true, force: true });
+        guard += 1;
+      }
+    } finally {
+      state.loadingEarlier = false;
+      updateTurnWindow();
+    }
+    const sel = activeListSelector();
+    const row = sel && [...document.querySelectorAll(sel)].find((r) => Number(r.dataset.turn) === 1);
+    if (row) row.scrollIntoView({ block: 'start' });
+    else window.scrollTo(0, 0);
+  }
+
+  // 滚动到顶部附近 -> 自动加载更早的一页（节流到每帧一次）
+  let scrollScheduled = false;
+  window.addEventListener('scroll', () => {
+    if (scrollScheduled) return;
+    scrollScheduled = true;
+    requestAnimationFrame(() => {
+      scrollScheduled = false;
+      if (state.loadingEarlier || state.loadedFrom <= 1) return;
+      if (!activeListSelector()) return;
+      const sc = document.scrollingElement || document.documentElement;
+      if (sc.scrollTop < 300) loadEarlier();
+    });
+  }, { passive: true });
 
   function render(data, force) {
     const head = data.summary || {};
@@ -583,6 +694,7 @@
     state.sig = sig;
     state.data = data;
     state.threadId = (data.thread && data.thread.thread_id) || state.threadId;
+    updateTurnWindow();
     $('error').classList.add('hide');
     $('overview').classList.toggle('hide', state.tab !== 'overview');
     $('stats').classList.toggle('hide', state.tab !== 'stats');
@@ -702,19 +814,25 @@
     return { total, shown };
   }
 
+  function windowLabel() {
+    if (!state.loadedFrom || !state.loadedTo) return '';
+    const total = turnTotals(state.data).total;
+    return (state.loadedFrom > 1 || state.loadedTo < total)
+      ? ` · 已加载第 ${state.loadedFrom}–${state.loadedTo} 轮` : '';
+  }
+
   function updateTurnWindow() {
     const btn = document.getElementById('opt-turnwindow');
     if (!btn) return;
-    const tw = turnTotals(state.data);
-    const all = state.limit === 0;
-    btn.textContent = all ? '只看最近轮次' : `显示全部 ${tw.total} 轮`;
-    btn.classList.toggle('hide', !all && tw.shown >= tw.total);
+    btn.classList.toggle('hide', state.loadedFrom <= 1);
+    btn.disabled = state.loadingEarlier;
+    btn.textContent = state.loadingEarlier ? '加载中…' : '跳到第 1 轮';
   }
 
   function renderStats(turns) {
     const s = state.data.summary || {};
     const tw = turnTotals(state.data);
-    $('stats-summary').textContent = `${tw.total} 轮 · ${s.steps ?? 0} 步 · 平均 ${avgSpeed(turns)} tok/s` + (tw.shown < tw.total ? ` · 显示最近 ${tw.shown} 轮` : '');
+    $('stats-summary').textContent = `${tw.total} 轮 · ${s.steps ?? 0} 步 · 平均 ${avgSpeed(turns)} tok/s` + windowLabel();
     updateTurnWindow();
     const rows = [];
     let sumSteps = 0, sumIn = 0, sumOut = 0, sumCached = 0, sumModel = 0, sumTool = 0, sumDur = 0;
@@ -824,7 +942,8 @@
     });
     $('trace-list').innerHTML = rows.join('') || '<div class="empty">没有匹配的轮次</div>';
     const twTrace = turnTotals(state.data);
-    $('trace-summary').textContent = `${list.length} 轮 · ${list.reduce((a, t) => a + (t.steps || 0), 0)} 步` + (list.length < twTrace.total ? ` · 显示最近 ${list.length} 轮` : '');
+    const traceLabel = windowLabel();
+    $('trace-summary').textContent = `${list.length} 轮 · ${list.reduce((a, t) => a + (t.steps || 0), 0)} 步` + (traceLabel ? `（已加载）${traceLabel}` : '');
     updateTurnWindow();
     list.filter((t) => state.traceOpen.has(t.index)).forEach((t) => ensureDetails(t.index));
   }
@@ -1155,11 +1274,7 @@
     ensureItems();
   });
 
-  $('opt-turnwindow').addEventListener('click', () => {
-    state.limit = state.limit === 0 ? null : 0;
-    // 切换窗口后强制重取：全部模式按"不含明细"取（体积小），展开某轮时再补 items
-    getData({ force: true });
-  });
+  $('opt-turnwindow').addEventListener('click', () => { jumpToFirst(); });
 
   $('refresh').addEventListener('click', () => {
     $('refresh').textContent = '刷新中…';

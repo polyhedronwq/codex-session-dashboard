@@ -193,46 +193,33 @@ function buildSnapshot() {
   };
 }
 
-function buildLongSnapshots(snapshot) {
-  // 模拟真实 payload：summary.turns=70，但默认只返回最近 60 轮（第 11..70 轮）；
-  // 点"显示全部"时返回 70 轮（第 1..70 轮）。meta 里带总数/窗口数。
+function buildPagingFixture(snapshot) {
+  // 模拟真实服务端：70 轮，page 视图按 from_turn/count 切片；items 视图只回一轮。
   const base = snapshot.turns[snapshot.turns.length - 1];
-  const make = (from, to, extraMeta) => {
-    const turns = [];
-    for (let i = from; i <= to; i += 1) {
-      turns.push(Object.assign({}, base, {
-        index: i,
-        items: (base.items || []).map((x) => Object.assign({}, x)),
-      }));
-    }
-    return Object.assign({}, snapshot, {
-      summary: Object.assign({}, snapshot.summary, {
-        turns: 70,
-        steps: 70 * (base.steps || 1),
-        last_turn: turns[turns.length - 1],
-        last_completed: turns[turns.length - 1],
-      }),
-      turns,
-      meta: Object.assign({}, snapshot.meta, {
-        total_turns: 70,
-        shown_turns: turns.length,
-        turn_limit: to - from + 1,
-        ...extraMeta,
-      }),
-    });
-  };
-  return {
-    window: make(11, 70, { total_turns: 70, shown_turns: 60, turn_limit: 60 }),
-    all: make(1, 70, { total_turns: 70, shown_turns: 70, turn_limit: 0 }),
-  };
+  const turns = [];
+  for (let i = 1; i <= 70; i += 1) {
+    turns.push(Object.assign({}, base, {
+      index: i,
+      items: (base.items || []).map((x) => Object.assign({}, x)),
+    }));
+  }
+  return Object.assign({}, snapshot, {
+    summary: Object.assign({}, snapshot.summary, {
+      turns: 70,
+      steps: 70 * (base.steps || 1),
+      last_turn: turns[69],
+      last_completed: turns[69],
+    }),
+    turns,
+    meta: Object.assign({}, snapshot.meta, { total_turns: 70, shown_turns: 70, turn_limit: 0 }),
+  });
 }
 
 // 临时 host：只做 MCP 的最小实现（initialize / tools/call / ui/open-link），
 // 并把收到的请求记到 window.HOST 上，供断言检查"面板真的发了请求"。
-function buildHostHtml(snapshot, longSnapshots) {
+function buildHostHtml(snapshot, paged) {
   const snapshotJs = JSON.stringify(snapshot).replace(/</g, '\\u003c');
-  const longWindowJs = JSON.stringify(longSnapshots.window).replace(/</g, '\\u003c');
-  const longAllJs = JSON.stringify(longSnapshots.all).replace(/</g, '\\u003c');
+  const pagedJs = JSON.stringify(paged).replace(/</g, '\\u003c');
   return [
     '<!doctype html><html><head><meta charset="utf-8"><style>',
     'html,body{margin:0;height:100%;background:#181818}iframe{border:0;width:100%;height:100%}',
@@ -243,12 +230,36 @@ function buildHostHtml(snapshot, longSnapshots) {
     'const HOST = window.HOST = {',
     "  calls: 0, opens: [], mode: PARAMS.get('mode') || 'ok',",
     "  errorText: PARAMS.get('errorText') || '读取本地会话记录失败，请稍后重试。',",
-    "  delay: Number(PARAMS.get('delay') || 0), long: false, lastArgs: null,",
+    "  delay: Number(PARAMS.get('delay') || 0), paged: PARAMS.get('paged') === '1',",
+    '  lastArgs: null, lastFrom: null, fromArgs: [], itemsCalls: 0, lastItemArgs: null,',
     '};',
     'const SNAPSHOT = ' + snapshotJs + ';',
-    'const LONG_WINDOW = ' + longWindowJs + ';',
-    'const LONG_ALL = ' + longAllJs + ';',
+    'const PAGED = ' + pagedJs + ';',
     "const frameEl = document.getElementById('frame');",
+    "if (PARAMS.get('tab')) frameEl.src = '../src/shared/panel.html#' + PARAMS.get('tab');",
+    'function pageData(args) {',
+    '  const size = args.count || 30;',
+    '  const total = PAGED.turns.length;',
+    '  let start, end;',
+    '  if (args.from_turn === undefined || args.from_turn === null) {',
+    '    end = total; start = Math.max(1, total - size + 1);',
+    '  } else {',
+    '    start = Math.max(1, Math.min(args.from_turn, total + 1));',
+    '    end = Math.min(total, start + size - 1);',
+    '    if (start > total) { start = Math.max(1, total - size + 1); end = total; }',
+    '  }',
+    '  const turns = PAGED.turns.slice(start - 1, end).map((t) => Object.assign({}, t, { items: [] }));',
+    '  return Object.assign({}, PAGED, { turns, meta: Object.assign({}, PAGED.meta, {',
+    '    total_turns: total, shown_turns: turns.length, turn_limit: size,',
+    '    window_from: start, window_to: end, has_earlier: start > 1, has_later: end < total }) });',
+    '}',
+    'function itemsData(args) {',
+    '  const idx = Number(args.items_for);',
+    '  const turn = PAGED.turns.find((t) => t.index === idx) || PAGED.turns[0];',
+    '  return Object.assign({}, PAGED, { turns: [turn], meta: Object.assign({}, PAGED.meta, {',
+    '    total_turns: PAGED.turns.length, shown_turns: 1, window_from: idx, window_to: idx,',
+    '    has_earlier: false, has_later: false }) });',
+    '}',
     "window.addEventListener('message', (e) => {",
     '  const msg = e.data;',
     "  if (!msg || msg.jsonrpc !== '2.0' || !msg.id) return;",
@@ -265,13 +276,22 @@ function buildHostHtml(snapshot, longSnapshots) {
     '  }',
     "  if (msg.method === 'tools/call') {",
     '    HOST.calls += 1;',
+    '    HOST.lastArgs = (msg.params && msg.params.arguments) || {};',
     "    if (HOST.mode === 'error') {",
     "      reply({ result: { content: [{ type: 'text', text: HOST.errorText }], isError: true } });",
-    '    } else {',
-    "      HOST.lastArgs = (msg.params && msg.params.arguments) || {};",
-    "      const data = HOST.long ? ((HOST.lastArgs.turns_limit === 0) ? LONG_ALL : LONG_WINDOW) : SNAPSHOT;",
-    "      reply({ result: { content: [{ type: 'text', text: 'ok' }], structuredContent: data } });",
+    '      return;',
     '    }',
+    '    let data = SNAPSHOT;',
+    '    if (HOST.paged) {',
+    "      if (HOST.lastArgs.view === 'items') { HOST.itemsCalls += 1; HOST.lastItemArgs = HOST.lastArgs; data = itemsData(HOST.lastArgs); }",
+    "      else if (HOST.lastArgs.view === 'page') {",
+    "        HOST.lastFrom = HOST.lastArgs.from_turn;",
+    "        HOST.fromArgs.push(HOST.lastArgs.from_turn === undefined ? null : HOST.lastArgs.from_turn);",
+    "        data = pageData(HOST.lastArgs);",
+    '      }',
+    '      else data = PAGED;',
+    '    }',
+    "    reply({ result: { content: [{ type: 'text', text: 'ok' }], structuredContent: data } });",
     '    return;',
     '  }',
     "  if (msg.method === 'ui/open-link') {",
@@ -289,7 +309,7 @@ function buildHostHtml(snapshot, longSnapshots) {
   if (!chromiumPath) { console.log('  找不到 playwright'); process.exit(1); }
   const hostFile = path.join(probeDir, 'panel-contract-host.html');
   const snapshot = buildSnapshot();
-  fs.writeFileSync(hostFile, buildHostHtml(snapshot, buildLongSnapshots(snapshot)), 'utf8');
+  fs.writeFileSync(hostFile, buildHostHtml(snapshot, buildPagingFixture(snapshot)), 'utf8');
 
   const edge = 'C:/Program Files (x86)/Microsoft/Edge/Application/msedge.exe';
   const browser = await chromiumPath.launch({ executablePath: fs.existsSync(edge) ? edge : undefined });
@@ -614,62 +634,117 @@ function buildHostHtml(snapshot, longSnapshots) {
       && kvMap['上下文占用'] === '12,000 / 258,400' && kvMap['自动压缩'] === '1 次',
       JSON.stringify(lastKv));
 
-    // ---------- 17. 轮次窗口：抬头标总数，且能一键加载全部轮次（不再把"最近 60"当总数） ----------
-    await page.evaluate(() => { window.HOST.long = true; });
-    await f(() => document.getElementById('refresh').click());
-    await sleep(1500);
-    await clickTab('统计');
-    const windowed = await f(() => ({
+    // ---------- 17. 分页：首屏最近 30 轮 + 滚到顶自动加载 + 刷新合并 ----------
+    const pagingPage = await newPage('?tab=stats&paged=1');
+    const pagingFrame = await frameOf(pagingPage);
+    const pf = (fn, arg) => pagingFrame.evaluate(fn, arg);
+    const wait = (ms) => pagingPage.waitForTimeout(ms);
+
+    const initial = await pf(() => ({
       summary: document.getElementById('stats-summary').textContent,
       rows: document.querySelectorAll('#stats-body tr[data-turn]').length,
-      firstRow: ((document.querySelector('#stats-body tr[data-turn]') || {}).innerText || '').replace(/\s+/g, ' ').trim(),
+      first: ((document.querySelector('#stats-body tr[data-turn]') || {}).innerText || '').replace(/\s+/g, ' ').trim(),
       btn: {
         text: document.getElementById('opt-turnwindow').textContent,
         hidden: document.getElementById('opt-turnwindow').classList.contains('hide'),
       },
     }));
-    record('面板/统计 只显示窗口时抬头标注总数、出现「显示全部」按钮',
-      windowed.summary.includes('70 轮')
-      && windowed.summary.includes('显示最近 60 轮')
-      && windowed.rows === 60
-      && windowed.firstRow.includes('第 11 轮')
-      && !windowed.btn.hidden && windowed.btn.text.includes('显示全部 70 轮'),
-      JSON.stringify(windowed).slice(0, 240));
+    record('面板/分页 首屏只取最近 30 轮并显示「跳到第 1 轮」',
+      initial.rows === 30 && initial.first.includes('第 41 轮')
+      && initial.summary.includes('70 轮') && initial.summary.includes('已加载第 41–70 轮')
+      && !initial.btn.hidden && initial.btn.text.includes('跳到第 1 轮'),
+      JSON.stringify(initial).slice(0, 220));
 
-    await f(() => document.getElementById('opt-turnwindow').click());
-    await sleep(1600);
-    const allView = await f(() => ({
-      summary: document.getElementById('stats-summary').textContent,
-      rows: document.querySelectorAll('#stats-body tr[data-turn]').length,
-      firstRow: ((document.querySelector('#stats-body tr[data-turn]') || {}).innerText || '').replace(/\s+/g, ' ').trim(),
-      btnText: document.getElementById('opt-turnwindow').textContent,
-    }));
-    const allArgs = await page.evaluate(() => window.HOST.lastArgs || {});
-    record('面板/统计 点「显示全部」后拉到全部轮次、抬头不再标截断',
-      allArgs.turns_limit === 0
-      && allView.rows === 70
-      && allView.firstRow.includes('第 1 轮')
-      && !allView.summary.includes('显示最近')
-      && allView.btnText.includes('只看最近'),
-      `args=${JSON.stringify(allArgs)} rows=${allView.rows} summary=${allView.summary.slice(0, 80)}`);
-
-    await clickTab('轨迹');
-    await sleep(500);
-    const traceAll = await f(() => {
-      const rows = [...document.querySelectorAll('#trace-list .trow')];
-      return {
-        count: rows.length,
-        first: ((rows[0] || {}).innerText || '').replace(/\s+/g, ' ').trim(),
-        summary: document.getElementById('trace-summary').textContent,
-      };
+    // 滚到顶部 -> 自动加载更早一页；锚定：同一轮在屏幕上的位置基本不变
+    const beforeTop = await pf(() => {
+      const row = document.querySelector('#stats-body tr[data-turn="41"]');
+      return row ? row.getBoundingClientRect().top : null;
     });
-    record('面板/轨迹 显示全部轮次后从第 1 轮开始、抬头不再显示截断',
-      traceAll.count >= 70
-      && traceAll.first.includes('第 1 轮')
-      && !traceAll.summary.includes('显示最近'),
-      `rows=${traceAll.count} first=${traceAll.first.slice(0, 60)} summary=${traceAll.summary.slice(0, 80)}`);
+    // scrollTop < 300 会触发"加载更早"；只滚一次，等它完成后再测（避免第二次滚动把结果覆盖）
+    await pf(() => { window.scrollTo(0, 140); });
+    await wait(1800);
+    const afterTop = await pf(() => {
+      const row = document.querySelector('#stats-body tr[data-turn="41"]');
+      return row ? row.getBoundingClientRect().top : null;
+    });
+    const earlier = await pf(() => ({
+      rows: document.querySelectorAll('#stats-body tr[data-turn]').length,
+      first: ((document.querySelector('#stats-body tr[data-turn]') || {}).innerText || '').replace(/\s+/g, ' ').trim(),
+      summary: document.getElementById('stats-summary').textContent,
+    }));
+    const earlierArgs = await pagingPage.evaluate(() => ({ froms: window.HOST.fromArgs.slice() }));
+    // 锚定校验：加载前先滚了 140px，同一轮的屏幕位置应"只跟着滚动量移动"，
+    // 而不是被新插入的 30 行往下推（没补偿的话偏差会是 ~2000px）。
+    const expectedTop = beforeTop === null ? null : beforeTop - 140;
+    record('面板/分页 滚到顶部自动加载更早一页，且滚动锚定不跳',
+      earlierArgs.froms.find((x) => x !== null && x !== undefined) === 11
+      && earlier.rows === 60 && earlier.first.includes('第 11 轮')
+      && expectedTop !== null && afterTop !== null && Math.abs(afterTop - expectedTop) < 24,
+      `froms=${JSON.stringify(earlierArgs.froms)} rows=${earlier.rows} anchor=${beforeTop}->${afterTop} expect≈${expectedTop}`);
 
-    record('面板契约/无脚本错误', pageErrors.length === 0, pageErrors.slice(0, 2).join(' | '));
+    // 再滚到顶 -> 自动加载第 1..30 轮，按钮隐藏（锚定后 scrollTop 已回到较高位置）
+    await pf(() => { window.scrollTo(0, 0); });
+    await wait(1800);
+    const earliest = await pf(() => ({
+      rows: document.querySelectorAll('#stats-body tr[data-turn]').length,
+      first: ((document.querySelector('#stats-body tr[data-turn]') || {}).innerText || '').replace(/\s+/g, ' ').trim(),
+      summary: document.getElementById('stats-summary').textContent,
+      btnHidden: document.getElementById('opt-turnwindow').classList.contains('hide'),
+    }));
+    record('面板/分页 连续滚到顶后显示全部 70 轮、从第 1 轮开始、按钮隐藏',
+      earliest.rows === 70 && earliest.first.includes('第 1 轮')
+      && earliest.btnHidden && !earliest.summary.includes('已加载'),
+      `rows=${earliest.rows} summary=${earliest.summary.slice(0, 80)}`);
+
+    // 刷新（尾部窗口）只合并，不收起已加载的历史，也不跳滚动位置
+    const scrollBefore = await pf(() => window.scrollY);
+    await pf(() => document.getElementById('refresh').click());
+    await wait(1600);
+    const afterRefresh = await pf(() => ({
+      rows: document.querySelectorAll('#stats-body tr[data-turn]').length,
+      summary: document.getElementById('stats-summary').textContent,
+      scrollY: window.scrollY,
+    }));
+    record('面板/分页 刷新只合并尾部：不收起历史、不改滚动位置',
+      afterRefresh.rows === 70 && !afterRefresh.summary.includes('已加载')
+      && Math.abs(afterRefresh.scrollY - scrollBefore) <= 2,
+      `rows=${afterRefresh.rows} scroll=${scrollBefore}->${afterRefresh.scrollY}`);
+
+    // 展开旧轮次 -> 走 items 视图，只取这一轮明细
+    await pf(() => document.querySelector('#stats-body tr[data-turn="1"]').click());
+    await wait(1200);
+    const itemState = await pagingPage.evaluate(() => ({ calls: window.HOST.itemsCalls, args: window.HOST.lastItemArgs }));
+    const itemDetail = await pf(() => ({
+      count: document.querySelectorAll('#stats-body details.it, #stats-body .itemrow').length,
+      hasText: document.getElementById('stats-body').innerText.includes('第 1 轮'),
+    }));
+    record('面板/分页 展开旧轮次走 items 视图并渲染明细',
+      itemState.calls >= 1 && itemState.args && itemState.args.view === 'items' && itemState.args.items_for === 1
+      && itemDetail.count >= 1,
+      `calls=${itemState.calls} args=${JSON.stringify(itemState.args)} detail=${itemDetail.count}`);
+
+    // ---------- 18. 「跳到第 1 轮」按钮：一次点完，不用滚 ----------
+    const jumpPage = await newPage('?tab=stats&paged=1');
+    const jumpFrame = await frameOf(jumpPage);
+    const jf = (fn, arg) => jumpFrame.evaluate(fn, arg);
+    await jf(() => document.getElementById('opt-turnwindow').click());
+    await jumpPage.waitForTimeout(3000);
+    const jumped = await jf(() => ({
+      rows: document.querySelectorAll('#stats-body tr[data-turn]').length,
+      first: ((document.querySelector('#stats-body tr[data-turn]') || {}).innerText || '').replace(/\s+/g, ' ').trim(),
+      btnHidden: document.getElementById('opt-turnwindow').classList.contains('hide'),
+      topTurn: (() => {
+        const rows = [...document.querySelectorAll('#stats-body tr[data-turn]')];
+        const firstVisible = rows.find((r) => r.getBoundingClientRect().bottom > 0);
+        return firstVisible ? Number(firstVisible.dataset.turn) : null;
+      })(),
+    }));
+    record('面板/分页 「跳到第 1 轮」加载全部并滚到第 1 轮',
+      jumped.rows === 70 && jumped.first.includes('第 1 轮')
+      && jumped.btnHidden && jumped.topTurn === 1,
+      `rows=${jumped.rows} top=${jumped.topTurn}`);
+
+    record('面板契约/无脚本错误', pageErrors.length === 0, pageErrors.slice(0, 2).join(' | '));    record('面板契约/无脚本错误', pageErrors.length === 0, pageErrors.slice(0, 2).join(' | '));
   } catch (error) {
     record('面板契约/执行', false, error && error.message ? error.message.split('\n')[0] : String(error));
   } finally {
