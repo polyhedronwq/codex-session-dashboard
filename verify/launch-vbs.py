@@ -122,6 +122,7 @@ def main_checks():
             bar.mkdir()
             (bar / 'launch.vbs').write_text(rendered, encoding='utf-8')
             (bar / 'injector.js').write_text('// placeholder', encoding='utf-8')
+            (bar / 'supervisor.js').write_text('// placeholder', encoding='utf-8')
 
             # ---- 跑 wscript ----
             record_file = tmp_path / 'record.jsonl'
@@ -163,10 +164,10 @@ def main_checks():
                         and '--remote-debugging-address=127.0.0.1' in codex_args
                         and '--remote-debugging-port=9223' in codex_args
                         and injector_args
-                        and injector_args[-1].endswith('injector.js')
+                        and injector_args[-1].endswith('supervisor.js')
                         and codex_entry['at'] <= injector_entry['at'])
-            record('launch.vbs 真的按顺序启动 Codex（调试端口）与注入器',
-                   order_ok, f'codex={codex_args} 注入器={injector_args}')
+            record('launch.vbs 真的按顺序启动 Codex（调试端口）与守护进程',
+                   order_ok, f'codex={codex_args} 守护={injector_args}')
 
             # ---- 断言 2：Codex 可见 / 注入器隐藏 / 间隔≥900ms / 未启动真实注入器 ----
             codex_handle = windows.get(codex_entry.get('pid')) if entries else None
@@ -177,9 +178,9 @@ def main_checks():
                          and injector_handle == 0
                          and gap >= 900
                          and after_injectors == real_injectors)
-            record('launch.vbs：Codex 窗口可见、注入器隐藏、间隔≥900ms 且不碰真实注入器',
+            record('launch.vbs：Codex 窗口可见、守护进程隐藏、间隔≥900ms 且不碰真实注入器',
                    window_ok,
-                   f'codex窗口={codex_handle} 注入器窗口={injector_handle} 间隔={gap}ms '
+                   f'codex窗口={codex_handle} 守护窗口={injector_handle} 间隔={gap}ms '
                    f'真实注入器 {real_injectors}→{after_injectors}')
     except Exception as error:  # noqa: BLE001 - 记失败继续
         record('launch.vbs 启动链路实跑', False, f'异常 {error.__class__.__name__}: {error}')

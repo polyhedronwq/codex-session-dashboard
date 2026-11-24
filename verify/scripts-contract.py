@@ -37,8 +37,9 @@ def check_start_chain():
         ('--remote-debugging-port=9223', 'launch.vbs 没有调试端口'),
         ('--remote-debugging-address=127.0.0.1', 'launch.vbs 没有强制 IPv4'),
         ('{{node}}', 'launch.vbs 没有 node 路径模板'),
-        ('injector.js', 'launch.vbs 没有启动 injector'),
-        (', 0, False', 'launch.vbs 的注入器不再是隐藏窗口'),
+        ('supervisor.js', 'launch.vbs 没有启动守护进程'),
+        (', 0, False', 'launch.vbs 的守护进程不再是隐藏窗口'),
+        ('.supervisor-pause', 'launch.vbs 没有清理暂停标记'),
     ):
         if needle not in launch:
             problems.append(name)
@@ -133,8 +134,25 @@ def check_shortcuts():
     return problems
 
 
+def check_supervisor():
+    sup = read('src/bar/supervisor.js')
+    problems = []
+    for needle, name in (
+        ('injector.js', 'supervisor.js 没有指向 injector.js'),
+        ('spawn(', 'supervisor.js 没有真正拉起子进程'),
+        ('.supervisor-pause', 'supervisor.js 不认识暂停标记'),
+        ('RESTART_DELAY_MS', 'supervisor.js 没有重启延迟'),
+        ('MAX_RESTARTS', 'supervisor.js 没有重启次数上限'),
+        ('process.exit(0)', 'supervisor.js 不会在正常停止时退出'),
+    ):
+        if needle not in sup:
+            problems.append(name)
+    return problems
+
+
 CHECKS = [
-    ('启动链路：start-bar.cmd → launch.vbs → 调试端口 + injector', check_start_chain),
+    ('启动链路：start-bar.cmd → launch.vbs → 调试端口 + supervisor', check_start_chain),
+    ('守护进程：会自动重启注入器、认暂停标记、有重启上限', check_supervisor),
     ('reload-page.js：端口不可达时优雅跳过', check_reload_dead_port),
     ('install.ps1 -CheckOnly：缺 node/python 时点名', check_installer_missing_deps),
     ('安装器：桌面 + 开始菜单快捷方式指向 launch.vbs', check_shortcuts),

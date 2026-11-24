@@ -102,17 +102,40 @@ def page_action(helper, action):
     return {'error': (out.stderr or out.stdout or 'no output')[-200:]}
 
 
+PAUSE = INSTALLED / '.supervisor-pause'
+
+
 def stop_injector():
+    # 守护进程会在 2 秒内重启注入器；先写暂停标记，确保本轮测试期间它保持停止。
+    try:
+        PAUSE.write_text('', encoding='utf-8')
+    except OSError:
+        pass
     subprocess.run([POWERSHELL, '-NoProfile', '-Command',
                     "Get-CimInstance Win32_Process -Filter \"Name='node.exe'\" | "
-                    "Where-Object { $_.CommandLine -match 'injector\\.js' } | "
+                    "Where-Object { $_.CommandLine -match 'supervisor\\.js|injector\\.js' } | "
                     "ForEach-Object { Stop-Process -Id $_.ProcessId -Force -ErrorAction SilentlyContinue }"],
                    capture_output=True, timeout=60)
 
 
 def start_injector():
+    try:
+        PAUSE.unlink()
+    except OSError:
+        pass
     subprocess.run([WSCRIPT, '//nologo', str(INSTALLED / 'injector-only.vbs')],
                    capture_output=True, timeout=30)
+
+
+def injector_count():
+    out = subprocess.run([POWERSHELL, '-NoProfile', '-Command',
+                          "@(Get-CimInstance Win32_Process -Filter \"Name='node.exe'\" | "
+                          "Where-Object { $_.CommandLine -match 'injector\\.js' }).Count"],
+                         capture_output=True, text=True, encoding='utf-8', errors='replace', timeout=30)
+    try:
+        return int((out.stdout or '0').strip().splitlines()[-1])
+    except (ValueError, IndexError):
+        return -1
 
 
 def wait_state(states, timeout):
@@ -146,22 +169,30 @@ def main():
         stop_injector()
         time.sleep(1.5)
         start_injector()
+        try:
+            started = wait_state({'starting'}, 10)
+            page = page_action(helper, 'state').get('page') or {}
+            bar = page.get('bar') or {}
+            dot = page.get('dot') or {}
+            record('冷启动预热期内不报故障',
+                   started == 'starting'
+                   and bar.get('opacity') == '0' and dot.get('hidden') is True,
+                   f'state={started} bar={bar} dot={dot}')
 
-        started = wait_state({'starting'}, 10)
-        page = page_action(helper, 'state').get('page') or {}
-        bar = page.get('bar') or {}
-        dot = page.get('dot') or {}
-        record('冷启动预热期内不报故障',
-               started == 'starting'
-               and bar.get('opacity') == '0' and dot.get('hidden') is True,
-               f'state={started} bar={bar} dot={dot}')
+            # 预热期过完、锚点仍然缺失 → 必须报 no-anchor（预热不能把真故障藏起来）
+            after_grace = wait_state({'no-anchor'}, GRACE_SECONDS + 12)
+            record(f'超过 {GRACE_SECONDS} 秒仍缺锚点必须报故障',
+                   after_grace == 'no-anchor', f'state={after_grace}')
+        finally:
+            # 任何异常都不能把调试环境留在"注入器已停、守护已暂停"的状态
+            page_action(helper, 'restore-sidebar')
+            try:
+                PAUSE.unlink()
+            except OSError:
+                pass
+            if injector_count() == 0:
+                start_injector()
 
-        # 预热期过完、锚点仍然缺失 → 必须报 no-anchor（预热不能把真故障藏起来）
-        after_grace = wait_state({'no-anchor'}, GRACE_SECONDS + 12)
-        record(f'超过 {GRACE_SECONDS} 秒仍缺锚点必须报故障',
-               after_grace == 'no-anchor', f'state={after_grace}')
-
-        page_action(helper, 'restore-sidebar')
         recovered = wait_state({'ok', 'empty'}, 20)
         record('恢复属性后回到 ok', recovered in ('ok', 'empty'), f'state={recovered}')
 

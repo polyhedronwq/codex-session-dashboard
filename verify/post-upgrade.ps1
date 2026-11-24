@@ -90,10 +90,14 @@ Check 'health.json 合法，且底栏构建与安装目录一致' {
   $okShape -and $okState -and $okBuild
 }
 
-Check '注入器单实例在运行' {
+Check '注入器单实例在运行，守护进程在监听' {
   $n = @(Get-CimInstance Win32_Process -Filter "Name='node.exe'" |
     Where-Object { $_.CommandLine -match 'injector\.js' }).Count
-  if ($n -ne 1) { Write-Host "        -> 注入器进程数 $n（应为 1）"; return $false }
+  $sup = @(Get-NetTCPConnection -LocalPort 9225 -State Listen -ErrorAction SilentlyContinue).Count
+  if ($n -ne 1 -or $sup -lt 1) {
+    Write-Host "        -> 注入器 $n 个（应为 1），守护监听 $sup（应 ≥1）"
+    return $false
+  }
   $true
 }
 

@@ -29,11 +29,14 @@ $manifest = Get-Content $manifestPath -Raw -Encoding UTF8 | ConvertFrom-Json
 
 Step '1/5 停止进程'
 Get-CimInstance Win32_Process -Filter "Name='node.exe'" |
-  Where-Object { $_.CommandLine -match 'injector\.js' } |
+  Where-Object { $_.CommandLine -match 'supervisor\.js|injector\.js' } |
   ForEach-Object { Stop-Process -Id $_.ProcessId -Force -ErrorAction SilentlyContinue; Say "注入器 $($_.ProcessId)" }
 Get-CimInstance Win32_Process -Filter "Name='python.exe'" |
   Where-Object { $_.CommandLine -match 'session-dashboard.*server\.py|bar_metrics\.py' } |
   ForEach-Object { Stop-Process -Id $_.ProcessId -Force -ErrorAction SilentlyContinue; Say "面板服务 $($_.ProcessId)" }
+
+$pauseMarker = Join-Path $env:USERPROFILE '.codex-bar\.supervisor-pause'
+if (Test-Path $pauseMarker) { Remove-Item $pauseMarker -Force -ErrorAction SilentlyContinue }
 
 Step '2/5 删除快捷方式'
 foreach ($link in @($manifest.shortcuts)) {
@@ -121,7 +124,7 @@ if (-not $KeepFiles) {
   }
 }
 
-$alive = @(Get-CimInstance Win32_Process -Filter "Name='node.exe'" | Where-Object { $_.CommandLine -match 'injector\.js' })
+$alive = @(Get-CimInstance Win32_Process -Filter "Name='node.exe'" | Where-Object { $_.CommandLine -match 'supervisor\.js|injector\.js' })
 if ($alive.Count -gt 0) { $residue += "注入器仍在运行 ($($alive.Count))" }
 
 if ($residue.Count -eq 0) {

@@ -11,13 +11,16 @@ const { chromium } = require('C:/Users/admin/AppData/Roaming/npm/node_modules/@p
 // 覆盖掉断言用的假快照。用 exit 兜底保证一定会被重新拉起。
 const barDir = path.join(os.homedir(), '.codex-bar');
 function stopInjector() {
+  // 守护进程会在 2 秒内重启注入器；先写暂停标记，确保断言期间它保持停止。
+  try { fs.writeFileSync(path.join(barDir, '.supervisor-pause'), ''); } catch (_) { /* 写不了也继续 */ }
   try {
     execFileSync('powershell', ['-NoProfile', '-Command',
-      "Get-CimInstance Win32_Process -Filter \"Name='node.exe'\" | Where-Object { $_.CommandLine -match 'injector\\.js' } | ForEach-Object { Stop-Process -Id $_.ProcessId -Force -ErrorAction SilentlyContinue }"],
+      "Get-CimInstance Win32_Process -Filter \"Name='node.exe'\" | Where-Object { $_.CommandLine -match 'supervisor\\.js|injector\\.js' } | ForEach-Object { Stop-Process -Id $_.ProcessId -Force -ErrorAction SilentlyContinue }"],
       { stdio: 'ignore' });
   } catch (_) { /* 停不掉就算了 */ }
 }
 function startInjector() {
+  try { fs.rmSync(path.join(barDir, '.supervisor-pause'), { force: true }); } catch (_) { /* 忽略 */ }
   try {
     execFileSync('wscript', ['//nologo', path.join(barDir, 'injector-only.vbs')], { stdio: 'ignore' });
   } catch (_) { /* 起不来后面会失败 */ }

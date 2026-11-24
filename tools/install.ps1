@@ -289,10 +289,13 @@ if (-not $testMode) {
 
 $startedAt = Get-Date
 if (-not $testMode) {
+  # 先写暂停标记：否则守护进程会在 2 秒内把注入器重新拉起，和正在替换的文件打架
+  New-Item -ItemType File -Path (Join-Path $barDir '.supervisor-pause') -Force | Out-Null
   Get-CimInstance Win32_Process -Filter "Name='node.exe'" |
-    Where-Object { $_.CommandLine -match 'injector\.js' } |
+    Where-Object { $_.CommandLine -match 'supervisor\.js|injector\.js' } |
     ForEach-Object { Stop-Process -Id $_.ProcessId -Force -ErrorAction SilentlyContinue }
-  Start-Process -FilePath "$env:WINDIR\System32\wscript.exe" -ArgumentList '//nologo', (Join-Path $barDir 'injector-only.vbs') -WindowStyle Hidden | Out-Null
+  Remove-Item (Join-Path $barDir '.supervisor-pause') -Force -ErrorAction SilentlyContinue
+  Start-Process -FilePath $node -ArgumentList (Join-Path $barDir 'supervisor.js') -WindowStyle Hidden | Out-Null
 }
 
 # 等注入器就绪：轮询 health.json，而不是固定睡 8 秒（实测恢复 0.7 秒，慢机器上 8 秒又可能不够）
@@ -338,7 +341,8 @@ if (-not $testMode -and (Test-Path $reload) -and $node) {
 
 if (-not $testMode) {
   $inj = @(Get-CimInstance Win32_Process -Filter "Name='node.exe'" | Where-Object { $_.CommandLine -match 'injector\.js' })
-  if ($inj.Count -eq 1) { Ok '注入器已启动' } else { Bad ('注入器进程数 ' + $inj.Count) }
+  $sup = @(Get-NetTCPConnection -LocalPort 9225 -State Listen -ErrorAction SilentlyContinue).Count
+  if ($inj.Count -eq 1 -and $sup -ge 1) { Ok '注入器与守护进程已启动' } else { Bad ('注入器进程数 ' + $inj.Count + '，守护监听端口 ' + $sup) }
   try {
     $null = Invoke-RestMethod 'http://localhost:9223/json/version' -TimeoutSec 3
     Ok '调试端口 9223 可用'

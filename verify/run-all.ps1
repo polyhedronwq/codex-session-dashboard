@@ -458,9 +458,12 @@ if ($SkipBar) {
 
   Check '重启注入器后能在 20 秒内恢复' {
     # 曾经因为"窗口在后台时布局尺寸为 0"被误判成空会话，底栏消失 3 分钟
+    # 守护进程会自动重启注入器；先写暂停标记，避免它和这轮"故意重启"互相打架。
+    New-Item -ItemType File -Path (Join-Path $installed '.supervisor-pause') -Force | Out-Null
     Get-CimInstance Win32_Process -Filter "Name='node.exe'" |
-      Where-Object { $_.CommandLine -match 'injector\.js' } |
+      Where-Object { $_.CommandLine -match 'supervisor\.js|injector\.js' } |
       ForEach-Object { Stop-Process -Id $_.ProcessId -Force -ErrorAction SilentlyContinue }
+    Remove-Item (Join-Path $installed '.supervisor-pause') -Force -ErrorAction SilentlyContinue
     Start-Sleep -Seconds 1
     Start-Process -FilePath "$env:WINDIR\System32\wscript.exe" `
       -ArgumentList '//nologo', (Join-Path $installed 'injector-only.vbs') -WindowStyle Hidden | Out-Null
@@ -516,6 +519,11 @@ Check '降级链路：锚点消失可见降级、恢复后回正' {
 
 Check '冷启动预热（加载中不报故障，超时后仍报故障）' {
   & $py (Join-Path $verify 'cold-start.py')
+  $LASTEXITCODE -eq 0
+}
+
+Check '注入器退出后底栏亮橙点提示，恢复后自动消失' {
+  & $py (Join-Path $verify 'injector-dead.py')
   $LASTEXITCODE -eq 0
 }
 
@@ -655,6 +663,11 @@ Check 'launch.vbs 启动链路实跑（假 Codex/node 记录器，不碰真实 C
   $LASTEXITCODE -eq 0
 }
 
+Check '守护进程：意外退出自动重启、认暂停标记、有重启上限' {
+  & $py (Join-Path $verify 'supervisor-behaviour.py')
+  $LASTEXITCODE -eq 0
+}
+
 Check '用户脚本冒烟（诊断/图标/监视器/-NoMirror）' {
   $args = @()
   if ($Full) { $args += '-Full' }
@@ -668,6 +681,21 @@ Section 'K. 性能阈值'
 Check '性能阈值（解析/指标往返/空闲 CPU/内存）' {
   & powershell -NoProfile -ExecutionPolicy Bypass -File (Join-Path $verify 'perf-check.ps1')
   $LASTEXITCODE -eq 0
+}
+
+# ============================================================ 末尾：恢复守护进程
+Check '套件结束后守护进程与注入器各 1 个' {
+  # 守护用端口 9225 的单实例锁判断（进程数会被 Volta shim 干扰）
+  $sup = @(Get-NetTCPConnection -LocalPort 9225 -State Listen -ErrorAction SilentlyContinue).Count
+  if ($sup -eq 0) {
+    Remove-Item (Join-Path $installed '.supervisor-pause') -Force -ErrorAction SilentlyContinue
+    Start-Process -FilePath $node -ArgumentList (Join-Path $installed 'supervisor.js') -WindowStyle Hidden | Out-Null
+    Start-Sleep -Seconds 6
+  }
+  $sup = @(Get-NetTCPConnection -LocalPort 9225 -State Listen -ErrorAction SilentlyContinue).Count
+  $inj = @(Get-CimInstance Win32_Process -Filter "Name='node.exe'" |
+    Where-Object { $_.CommandLine -match 'injector\.js' }).Count
+  ($sup -ge 1) -and ($inj -eq 1)
 }
 
 # ============================================================ L. 重载与重注入
