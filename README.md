@@ -134,6 +134,9 @@ python verify/test_server.py         # 解析层单元测试
 ./verify/perf-baseline.ps1           # 生成 docs/PERF.md
 ```
 
+> 上面的 `verify/` 脚本面向维护者：需要本机 Codex 调试端口与 Playwright，会临时停/启注入器、
+> 切换会话并开关面板标签页，且**不随发布包分发**。普通用户安装后不需要运行它们。
+
 > Codex 桌面版会自动更新。升级后（尤其版本与 `install.ps1` 里记录的验证版本不同时）
 > 先跑 `post-upgrade.ps1`：它只检查最容易被页面结构变化打破的四项，几十秒出结论。
 
