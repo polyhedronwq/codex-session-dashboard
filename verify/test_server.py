@@ -437,5 +437,29 @@ class ResponseItemTests(unittest.TestCase):
         self.assertEqual(summary['user_messages'], 1)
 
 
+class WindowTests(unittest.TestCase):
+    """P16：轮次窗口——默认最近 60 轮，但能取全部，且展开旧轮次时窗口包含它。"""
+
+    def test_default_window_keeps_latest_turns(self):
+        turns = [{'index': i} for i in range(1, 71)]
+        shown, total, limit = SRV.window_turns(turns)
+        self.assertEqual(total, 70)
+        self.assertEqual(limit, SRV.MAX_TURNS)
+        self.assertEqual(len(shown), 60)
+        self.assertEqual(shown[0]['index'], 11)
+
+    def test_zero_limit_returns_all(self):
+        turns = [{'index': i} for i in range(1, 71)]
+        shown, total, _limit = SRV.window_turns(turns, limit=0)
+        self.assertEqual(len(shown), 70)
+        self.assertEqual(shown[0]['index'], 1)
+
+    def test_focus_makes_window_include_early_turn(self):
+        turns = [{'index': i} for i in range(1, 71)]
+        shown, _total, _limit = SRV.window_turns(turns, focus=3)
+        self.assertEqual(shown[0]['index'], 3)
+        self.assertIn(3, [t['index'] for t in shown])
+
+
 if __name__ == '__main__':
     unittest.main(verbosity=2)

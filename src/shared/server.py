@@ -894,7 +894,19 @@ def subagent_graph(thread_id, main_tokens):
         con.close()
 
 
-def payload_for(thread_id):
+def window_turns(turns, limit=None, focus=None):
+    """取轮次窗口：默认最近 MAX_TURNS；limit<=0 取全部；focus 保证被展开的轮次在窗口内。"""
+    total = len(turns)
+    lim = MAX_TURNS if limit is None else int(limit)
+    if focus is not None:
+        # focus 是 1-based 轮次号：窗口要从第 focus 轮开始取，才能包含它
+        lim = max(lim, total - int(focus) + 1)
+    if lim <= 0 or lim >= total:
+        return list(turns), total, lim
+    return list(turns[-lim:]), total, lim
+
+
+def payload_for(thread_id, limit=None, focus=None):
     row = thread_row(thread_id)
     if row is None:
         return {'ok': False, 'reason': 'not_found', 'thread_id': thread_id}
@@ -913,6 +925,7 @@ def payload_for(thread_id):
     turns = build_turns(state)
     summary = build_summary(state, turns, thread_id)
     summary['subagents'] = subagent_graph(thread_id, (summary.get('total') or {}).get('total_tokens'))
+    shown, total_turns, turn_limit = window_turns(turns, limit, focus)
     return {
         'ok': True,
         'thread': {
@@ -924,11 +937,15 @@ def payload_for(thread_id):
             'source': row['source'],
         },
         'summary': summary,
-        'turns': turns[-MAX_TURNS:],
+        'turns': shown,
         'meta': {
             'parse_errors': state['parse_errors'],
             'file_bytes': state['offset'],
             'generated_at': datetime.datetime.now(datetime.timezone.utc).isoformat(),
+            # 面板据此显示"共 N 轮 / 显示最近 M 轮"并给"显示全部"按钮，不再把窗口当总数
+            'total_turns': total_turns,
+            'shown_turns': len(shown),
+            'turn_limit': turn_limit,
         },
     }
 
@@ -942,6 +959,12 @@ TOOL = {
         'type': 'object',
         'properties': {
             'thread_id': {'type': 'string', 'description': 'Optional explicit thread UUID; defaults to the current conversation.'},
+            'turns_limit': {'type': 'integer',
+                            'description': 'How many recent turns to return; 0 means all. Defaults to 60.'},
+            'items_for': {'type': 'integer',
+                          'description': 'Only include step items for this 1-based turn index (used to expand one row).'},
+            'include_items': {'type': 'boolean', 'description': 'Set false to return turn summaries without step items.'},
+            'include_details': {'type': 'boolean', 'description': 'Set true to include full command/output details.'},
         },
         'additionalProperties': False,
     },
@@ -960,8 +983,21 @@ def dashboard_result(params):
             'content': [{'type': 'text', 'text': '无法识别当前会话：请在 Codex 会话内打开此面板。'}],
             'isError': True,
         }
+    args = (params or {}).get('arguments') or {}
+    if not isinstance(args, dict):
+        args = {}
+    items_for = args.get('items_for')
     try:
-        data = payload_for(thread_id)
+        items_for = int(items_for) if items_for is not None else None
+    except (TypeError, ValueError):
+        items_for = None
+    turns_limit = args.get('turns_limit')
+    try:
+        turns_limit = int(turns_limit) if turns_limit is not None else None
+    except (TypeError, ValueError):
+        turns_limit = None
+    try:
+        data = payload_for(thread_id, limit=turns_limit, focus=items_for)
     except (OSError, sqlite3.Error):
         return {
             'content': [{'type': 'text', 'text': '读取本地会话记录失败，请稍后重试。'}],
@@ -971,14 +1007,6 @@ def dashboard_result(params):
         reason = data.get('reason')
         text = '找不到该会话的本地记录。' if reason == 'not_found' else '该会话的本地记录文件不可用。'
         return {'content': [{'type': 'text', 'text': text}], 'isError': True}
-    args = (params or {}).get('arguments') or {}
-    if not isinstance(args, dict):
-        args = {}
-    items_for = args.get('items_for')
-    try:
-        items_for = int(items_for) if items_for is not None else None
-    except (TypeError, ValueError):
-        items_for = None
     include_items = args.get('include_items', True) is not False
     include_details = args.get('include_details') is True
     if not include_items or items_for is not None:

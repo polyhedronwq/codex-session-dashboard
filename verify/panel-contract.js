@@ -193,10 +193,46 @@ function buildSnapshot() {
   };
 }
 
+function buildLongSnapshots(snapshot) {
+  // 模拟真实 payload：summary.turns=70，但默认只返回最近 60 轮（第 11..70 轮）；
+  // 点"显示全部"时返回 70 轮（第 1..70 轮）。meta 里带总数/窗口数。
+  const base = snapshot.turns[snapshot.turns.length - 1];
+  const make = (from, to, extraMeta) => {
+    const turns = [];
+    for (let i = from; i <= to; i += 1) {
+      turns.push(Object.assign({}, base, {
+        index: i,
+        items: (base.items || []).map((x) => Object.assign({}, x)),
+      }));
+    }
+    return Object.assign({}, snapshot, {
+      summary: Object.assign({}, snapshot.summary, {
+        turns: 70,
+        steps: 70 * (base.steps || 1),
+        last_turn: turns[turns.length - 1],
+        last_completed: turns[turns.length - 1],
+      }),
+      turns,
+      meta: Object.assign({}, snapshot.meta, {
+        total_turns: 70,
+        shown_turns: turns.length,
+        turn_limit: to - from + 1,
+        ...extraMeta,
+      }),
+    });
+  };
+  return {
+    window: make(11, 70, { total_turns: 70, shown_turns: 60, turn_limit: 60 }),
+    all: make(1, 70, { total_turns: 70, shown_turns: 70, turn_limit: 0 }),
+  };
+}
+
 // 临时 host：只做 MCP 的最小实现（initialize / tools/call / ui/open-link），
 // 并把收到的请求记到 window.HOST 上，供断言检查"面板真的发了请求"。
-function buildHostHtml(snapshot) {
+function buildHostHtml(snapshot, longSnapshots) {
   const snapshotJs = JSON.stringify(snapshot).replace(/</g, '\\u003c');
+  const longWindowJs = JSON.stringify(longSnapshots.window).replace(/</g, '\\u003c');
+  const longAllJs = JSON.stringify(longSnapshots.all).replace(/</g, '\\u003c');
   return [
     '<!doctype html><html><head><meta charset="utf-8"><style>',
     'html,body{margin:0;height:100%;background:#181818}iframe{border:0;width:100%;height:100%}',
@@ -207,9 +243,11 @@ function buildHostHtml(snapshot) {
     'const HOST = window.HOST = {',
     "  calls: 0, opens: [], mode: PARAMS.get('mode') || 'ok',",
     "  errorText: PARAMS.get('errorText') || '读取本地会话记录失败，请稍后重试。',",
-    "  delay: Number(PARAMS.get('delay') || 0),",
+    "  delay: Number(PARAMS.get('delay') || 0), long: false, lastArgs: null,",
     '};',
     'const SNAPSHOT = ' + snapshotJs + ';',
+    'const LONG_WINDOW = ' + longWindowJs + ';',
+    'const LONG_ALL = ' + longAllJs + ';',
     "const frameEl = document.getElementById('frame');",
     "window.addEventListener('message', (e) => {",
     '  const msg = e.data;',
@@ -230,7 +268,9 @@ function buildHostHtml(snapshot) {
     "    if (HOST.mode === 'error') {",
     "      reply({ result: { content: [{ type: 'text', text: HOST.errorText }], isError: true } });",
     '    } else {',
-    "      reply({ result: { content: [{ type: 'text', text: 'ok' }], structuredContent: SNAPSHOT } });",
+    "      HOST.lastArgs = (msg.params && msg.params.arguments) || {};",
+    "      const data = HOST.long ? ((HOST.lastArgs.turns_limit === 0) ? LONG_ALL : LONG_WINDOW) : SNAPSHOT;",
+    "      reply({ result: { content: [{ type: 'text', text: 'ok' }], structuredContent: data } });",
     '    }',
     '    return;',
     '  }',
@@ -249,7 +289,7 @@ function buildHostHtml(snapshot) {
   if (!chromiumPath) { console.log('  找不到 playwright'); process.exit(1); }
   const hostFile = path.join(probeDir, 'panel-contract-host.html');
   const snapshot = buildSnapshot();
-  fs.writeFileSync(hostFile, buildHostHtml(snapshot), 'utf8');
+  fs.writeFileSync(hostFile, buildHostHtml(snapshot, buildLongSnapshots(snapshot)), 'utf8');
 
   const edge = 'C:/Program Files (x86)/Microsoft/Edge/Application/msedge.exe';
   const browser = await chromiumPath.launch({ executablePath: fs.existsSync(edge) ? edge : undefined });
@@ -573,6 +613,61 @@ function buildHostHtml(snapshot) {
       && kvMap['首 token 延迟'] === '100ms' && kvMap['总用时'] === '2s'
       && kvMap['上下文占用'] === '12,000 / 258,400' && kvMap['自动压缩'] === '1 次',
       JSON.stringify(lastKv));
+
+    // ---------- 17. 轮次窗口：抬头标总数，且能一键加载全部轮次（不再把"最近 60"当总数） ----------
+    await page.evaluate(() => { window.HOST.long = true; });
+    await f(() => document.getElementById('refresh').click());
+    await sleep(1500);
+    await clickTab('统计');
+    const windowed = await f(() => ({
+      summary: document.getElementById('stats-summary').textContent,
+      rows: document.querySelectorAll('#stats-body tr[data-turn]').length,
+      firstRow: ((document.querySelector('#stats-body tr[data-turn]') || {}).innerText || '').replace(/\s+/g, ' ').trim(),
+      btn: {
+        text: document.getElementById('opt-turnwindow').textContent,
+        hidden: document.getElementById('opt-turnwindow').classList.contains('hide'),
+      },
+    }));
+    record('面板/统计 只显示窗口时抬头标注总数、出现「显示全部」按钮',
+      windowed.summary.includes('70 轮')
+      && windowed.summary.includes('显示最近 60 轮')
+      && windowed.rows === 60
+      && windowed.firstRow.includes('第 11 轮')
+      && !windowed.btn.hidden && windowed.btn.text.includes('显示全部 70 轮'),
+      JSON.stringify(windowed).slice(0, 240));
+
+    await f(() => document.getElementById('opt-turnwindow').click());
+    await sleep(1600);
+    const allView = await f(() => ({
+      summary: document.getElementById('stats-summary').textContent,
+      rows: document.querySelectorAll('#stats-body tr[data-turn]').length,
+      firstRow: ((document.querySelector('#stats-body tr[data-turn]') || {}).innerText || '').replace(/\s+/g, ' ').trim(),
+      btnText: document.getElementById('opt-turnwindow').textContent,
+    }));
+    const allArgs = await page.evaluate(() => window.HOST.lastArgs || {});
+    record('面板/统计 点「显示全部」后拉到全部轮次、抬头不再标截断',
+      allArgs.turns_limit === 0
+      && allView.rows === 70
+      && allView.firstRow.includes('第 1 轮')
+      && !allView.summary.includes('显示最近')
+      && allView.btnText.includes('只看最近'),
+      `args=${JSON.stringify(allArgs)} rows=${allView.rows} summary=${allView.summary.slice(0, 80)}`);
+
+    await clickTab('轨迹');
+    await sleep(500);
+    const traceAll = await f(() => {
+      const rows = [...document.querySelectorAll('#trace-list .trow')];
+      return {
+        count: rows.length,
+        first: ((rows[0] || {}).innerText || '').replace(/\s+/g, ' ').trim(),
+        summary: document.getElementById('trace-summary').textContent,
+      };
+    });
+    record('面板/轨迹 显示全部轮次后从第 1 轮开始、抬头不再显示截断',
+      traceAll.count >= 70
+      && traceAll.first.includes('第 1 轮')
+      && !traceAll.summary.includes('显示最近'),
+      `rows=${traceAll.count} first=${traceAll.first.slice(0, 60)} summary=${traceAll.summary.slice(0, 80)}`);
 
     record('面板契约/无脚本错误', pageErrors.length === 0, pageErrors.slice(0, 2).join(' | '));
   } catch (error) {

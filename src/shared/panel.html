@@ -241,6 +241,7 @@
     <span class="chip" id="auto">自动刷新 4s</span>
     <span class="grow"></span>
     <span class="sub" id="updated"></span>
+    <button id="opt-turnwindow" class="hide" title="加载更早的轮次">显示全部轮次</button>
     <button id="refresh">刷新</button>
   </header>
 
@@ -376,7 +377,7 @@
 <script>
 (() => {
   const state = {
-    data: null, tab: 'overview', expanded: new Set(), all: false, sig: '', threadId: null,
+    data: null, tab: 'overview', expanded: new Set(), all: false, sig: '', threadId: null, limit: null,
     attempted: new Set(), traceOpen: new Set(), query: '',
     openRec: null, detailTurns: new Set(), detailPending: new Set(), foldedGroups: new Set(),
     opts: { total: false, events: false, delta: false, ctxMode: 'latest', foldCalls: true },
@@ -539,8 +540,10 @@
     const args = {};
     const threadId = state.threadId || storedThreadId();
     if (threadId) args.thread_id = threadId;
+    const limit = opts.limit !== undefined ? opts.limit : state.limit;
+    if (limit !== null) args.turns_limit = limit;
     if (opts.itemsFor) args.items_for = opts.itemsFor;
-    else if (opts.lite) args.include_items = false;
+    else if (opts.lite || limit === 0) args.include_items = false;
     if (opts.details) args.include_details = true;
     return request('tools/call', { name: 'show_session_dashboard', arguments: args })
       .then((result) => {
@@ -690,9 +693,29 @@
     $('recent').innerHTML = rows.join('') || '<tr><td colspan="7" class="mut">暂无数据</td></tr>';
   }
 
+  function turnTotals(data) {
+    const d = data || state.data || {};
+    const meta = d.meta || {};
+    const s = d.summary || {};
+    const total = meta.total_turns || s.turns || 0;
+    const shown = meta.shown_turns || (d.turns || []).length;
+    return { total, shown };
+  }
+
+  function updateTurnWindow() {
+    const btn = document.getElementById('opt-turnwindow');
+    if (!btn) return;
+    const tw = turnTotals(state.data);
+    const all = state.limit === 0;
+    btn.textContent = all ? '只看最近轮次' : `显示全部 ${tw.total} 轮`;
+    btn.classList.toggle('hide', !all && tw.shown >= tw.total);
+  }
+
   function renderStats(turns) {
     const s = state.data.summary || {};
-    $('stats-summary').textContent = `${s.turns ?? 0} 轮 · ${s.steps ?? 0} 步 · 平均 ${avgSpeed(turns)} tok/s` + (turns.length < (s.turns || 0) ? ` · 显示最近 ${turns.length} 轮` : '');
+    const tw = turnTotals(state.data);
+    $('stats-summary').textContent = `${tw.total} 轮 · ${s.steps ?? 0} 步 · 平均 ${avgSpeed(turns)} tok/s` + (tw.shown < tw.total ? ` · 显示最近 ${tw.shown} 轮` : '');
+    updateTurnWindow();
     const rows = [];
     let sumSteps = 0, sumIn = 0, sumOut = 0, sumCached = 0, sumModel = 0, sumTool = 0, sumDur = 0;
     for (const t of turns) {
@@ -800,7 +823,9 @@
         </div>${open ? `<div class="tdetail">${recordsHtml(t)}</div>` : ''}`;
     });
     $('trace-list').innerHTML = rows.join('') || '<div class="empty">没有匹配的轮次</div>';
-    $('trace-summary').textContent = `${list.length} 轮 · ${list.reduce((a, t) => a + (t.steps || 0), 0)} 步` + (list.length < (state.data.summary.turns || 0) ? ` · 显示最近 ${list.length} 轮` : '');
+    const twTrace = turnTotals(state.data);
+    $('trace-summary').textContent = `${list.length} 轮 · ${list.reduce((a, t) => a + (t.steps || 0), 0)} 步` + (list.length < twTrace.total ? ` · 显示最近 ${list.length} 轮` : '');
+    updateTurnWindow();
     list.filter((t) => state.traceOpen.has(t.index)).forEach((t) => ensureDetails(t.index));
   }
 
@@ -1128,6 +1153,12 @@
     state.expanded.has(index) ? state.expanded.delete(index) : state.expanded.add(index);
     renderStats(state.data.turns || []);
     ensureItems();
+  });
+
+  $('opt-turnwindow').addEventListener('click', () => {
+    state.limit = state.limit === 0 ? null : 0;
+    // 切换窗口后强制重取：全部模式按"不含明细"取（体积小），展开某轮时再补 items
+    getData({ force: true });
   });
 
   $('refresh').addEventListener('click', () => {
