@@ -31,7 +31,7 @@ jobs:
           if ($tag -ne "v$v") { throw "tag=$tag 与 VERSION=v$v 不一致：发版前先改 VERSION 再打 tag" }
           $remoteTag = git ls-remote --tags origin "refs/tags/$tag"
           if (-not $remoteTag) { throw "远端没有 tag $tag（请先 git push origin $tag）" }
-          "RELEASE_TAG=$tag" | Out-File -FilePath $env:GITHUB_ENV -Encoding utf8
+          Write-Host "release tag: $tag / version: $v"
 
       - uses: actions/setup-node@v4
         with:
@@ -125,7 +125,8 @@ jobs:
         shell: powershell
         run: |
           $v = (Get-Content VERSION -Raw).Trim()
-          $tag = $env:RELEASE_TAG
+          $tag = $env:GITHUB_REF_NAME
+          if ($tag -notmatch '^v\d') { $tag = "v$v" }
           $zip = Join-Path 'dist-package' "codex-dashboard-$v.zip"
           $sha = "$zip.sha256"
           $repo = $env:GITHUB_REPOSITORY
