@@ -260,19 +260,29 @@ $shell = New-Object -ComObject WScript.Shell
 $icon = Join-Path $barDir 'chatgpt-white.ico'
 $launch = Join-Path $barDir 'launch.vbs'
 $shortcuts = @()
+$shortcutWarnings = @()
 foreach ($dir in @($desktop, $startMenu)) {
-  if (-not (Test-Path $dir)) { New-Item -ItemType Directory -Path $dir -Force | Out-Null }
-  $link = Join-Path $dir 'ChatGPT 仪表盘.lnk'
-  $sc = $shell.CreateShortcut($link)
-  $sc.TargetPath = "$env:WINDIR\System32\wscript.exe"
-  $sc.Arguments = '//nologo "' + $launch + '"'
-  $sc.WorkingDirectory = $barDir
-  $sc.IconLocation = "$icon,0"
-  $sc.Description = 'ChatGPT / Codex，带会话仪表盘底栏'
-  $sc.Save()
-  $shortcuts += $link
+  try {
+    if (-not (Test-Path $dir)) { New-Item -ItemType Directory -Path $dir -Force | Out-Null }
+    $link = Join-Path $dir 'ChatGPT 仪表盘.lnk'
+    $sc = $shell.CreateShortcut($link)
+    $sc.TargetPath = "$env:WINDIR\System32\wscript.exe"
+    $sc.Arguments = '//nologo "' + $launch + '"'
+    $sc.WorkingDirectory = $barDir
+    $sc.IconLocation = "$icon,0"
+    $sc.Description = 'ChatGPT / Codex，带会话仪表盘底栏'
+    $sc.Save()
+    $shortcuts += $link
+  } catch {
+    # 快捷方式只是便利入口：失败不能中断安装（英文系统上中文 .lnk 可能失败）
+    $shortcutWarnings += "${dir}: $($_.Exception.Message)"
+  }
 }
-Say '快捷方式: 桌面 + 开始菜单'
+if ($shortcutWarnings.Count -gt 0) {
+  foreach ($w in $shortcutWarnings) { Write-Host ('  [警告] 快捷方式创建失败（可用 start-bar.cmd 手动启动）: ' + $w) -ForegroundColor Yellow }
+} else {
+  Say '快捷方式: 桌面 + 开始菜单'
+}
 
 [ordered]@{
   installedAt  = (Get-Date).ToString('o')
