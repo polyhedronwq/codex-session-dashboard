@@ -1,7 +1,7 @@
 name: Release
 
 # 打 tag（v*）即发版：构建发布包 → 隔离安装自检 → 建 GitHub Release 并上传 zip + SHA256。
-# 也支持手动重跑：tag 已在则覆盖重传（Actions 里 "Re-run jobs" 或 workflow_dispatch）。
+# 失败时用 ::error:: annotation 暴露原因（Actions 日志需登录，annotation 是公开可读的）。
 on:
   push:
     tags: ['v*']
@@ -23,15 +23,21 @@ jobs:
           fetch-depth: 0
 
       - name: 版本与 tag 一致性
-        shell: powershell
+        shell: pwsh
         run: |
+          trap {
+            Write-Output ("::error::版本与tag检查失败: " + $_.Exception.Message)
+            Write-Output ("::error::stack: " + ($_.ScriptStackTrace -replace "`n", ' | '))
+            exit 1
+          }
           $v = (Get-Content VERSION -Raw).Trim()
           $tag = $env:GITHUB_REF_NAME
           if ($tag -notmatch '^v\d') { $tag = "v$v" }
+          Write-Output ("::notice::tag=$tag version=$v ref_name=$($env:GITHUB_REF_NAME) ref_type=$($env:GITHUB_REF_TYPE)")
           if ($tag -ne "v$v") { throw "tag=$tag 与 VERSION=v$v 不一致：发版前先改 VERSION 再打 tag" }
           $remoteTag = git ls-remote --tags origin "refs/tags/$tag"
           if (-not $remoteTag) { throw "远端没有 tag $tag（请先 git push origin $tag）" }
-          Write-Host "release tag: $tag / version: $v"
+          Write-Output "release tag check ok"
 
       - uses: actions/setup-node@v4
         with:
@@ -42,12 +48,17 @@ jobs:
           python-version: '3.12'
 
       - name: 构建发布包（不渲染本机路径）
-        shell: powershell
+        shell: pwsh
         run: ./build.ps1 -NoMirror
 
       - name: 发布包隔离安装自检
-        shell: powershell
+        shell: pwsh
         run: |
+          trap {
+            Write-Output ("::error::发布包自检失败: " + $_.Exception.Message)
+            Write-Output ("::error::stack: " + ($_.ScriptStackTrace -replace "`n", ' | '))
+            exit 1
+          }
           $v = (Get-Content VERSION -Raw).Trim()
           $zip = Join-Path 'dist-package' "codex-dashboard-$v.zip"
           if (-not (Test-Path $zip)) { throw '发布包未生成' }
@@ -86,10 +97,16 @@ jobs:
           }
           $plugin = Get-Content (Join-Path $testHome '.codex-bar\plugin-market\plugins\session-dashboard\.codex-plugin\plugin.json') -Raw -Encoding UTF8 | ConvertFrom-Json
           if ($plugin.version -ne $v) { throw "plugin.json 版本 $($plugin.version) != VERSION $v" }
+          Write-Output "发布包自检 ok"
 
       - name: 生成发布说明与 SHA256
-        shell: powershell
+        shell: pwsh
         run: |
+          trap {
+            Write-Output ("::error::生成发布说明失败: " + $_.Exception.Message)
+            Write-Output ("::error::stack: " + ($_.ScriptStackTrace -replace "`n", ' | '))
+            exit 1
+          }
           $v = (Get-Content VERSION -Raw).Trim()
           $zip = Join-Path 'dist-package' "codex-dashboard-$v.zip"
           $hash = (Get-FileHash $zip -Algorithm SHA256).Hash.ToLower()
@@ -119,11 +136,16 @@ jobs:
             '包内每个文件在安装前都会按 manifest.json 做 SHA256 校验。'
           ) -join [Environment]::NewLine
           Set-Content release-notes.md $notes -Encoding utf8
-          Write-Host "SHA256=$hash"
+          Write-Output "SHA256=$hash"
 
       - name: 创建 / 更新 GitHub Release
-        shell: powershell
+        shell: pwsh
         run: |
+          trap {
+            Write-Output ("::error::创建 Release 失败: " + $_.Exception.Message)
+            Write-Output ("::error::stack: " + ($_.ScriptStackTrace -replace "`n", ' | '))
+            exit 1
+          }
           $v = (Get-Content VERSION -Raw).Trim()
           $tag = $env:GITHUB_REF_NAME
           if ($tag -notmatch '^v\d') { $tag = "v$v" }
@@ -132,9 +154,10 @@ jobs:
           $repo = $env:GITHUB_REPOSITORY
           gh release view $tag --repo $repo | Out-Null
           if ($LASTEXITCODE -eq 0) {
-            Write-Host "release $tag 已存在：覆盖上传附件并更新说明"
+            Write-Output "release $tag 已存在：覆盖上传附件并更新说明"
             gh release upload $tag $zip $sha --clobber --repo $repo
             gh release edit $tag --notes-file release-notes.md --repo $repo
           } else {
             gh release create $tag $zip $sha --title "codex-session-dashboard v$v" --notes-file release-notes.md --verify-tag --repo $repo
           }
+          Write-Output "release ok: $tag"
