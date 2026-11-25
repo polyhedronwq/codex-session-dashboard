@@ -29,8 +29,8 @@ jobs:
           $tag = $env:GITHUB_REF_NAME
           if ($tag -notmatch '^v\d') { $tag = "v$v" }
           if ($tag -ne "v$v") { throw "tag=$tag 与 VERSION=v$v 不一致：发版前先改 VERSION 再打 tag" }
-          git rev-parse --verify "refs/tags/$tag" | Out-Null
-          if ($LASTEXITCODE -ne 0) { throw "本地没有 tag $tag（请先 git push origin $tag）" }
+          $remoteTag = git ls-remote --tags origin "refs/tags/$tag"
+          if (-not $remoteTag) { throw "远端没有 tag $tag（请先 git push origin $tag）" }
           "RELEASE_TAG=$tag" | Out-File -FilePath $env:GITHUB_ENV -Encoding utf8
 
       - uses: actions/setup-node@v4

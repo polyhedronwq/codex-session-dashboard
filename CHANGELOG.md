@@ -3,6 +3,18 @@
 本项目遵循语义化版本（`VERSION` 文件）。底栏内部另有一个构建号（`injected.js` 里的 `BUILD`），
 用于热更新排查，两者都会写进安装包的 `manifest.json`。
 
+## 1.2.2
+
+发布流水线修复（安装包内容与 1.2.1 相同，无功能变化）。
+
+- 修 `.github/workflows/release.yml` 的 tag 校验：`actions/checkout` 默认不 fetch tags，
+  原来的 `git rev-parse --verify refs/tags/...` 会误判"没有 tag"；改为 `git ls-remote --tags`
+  检查远端，tag 推送后 Release 才会跑起来。
+- `v1.2.1` 的 tag 已推送、但其提交内工作流有上述 bug，导致 Release 未创建；本版重新发版
+  （`v1.2.2`，安装包与 1.2.1 功能一致）。
+- 发布包首次走完整自动链路：构建 → 干净 runner 上 `-CheckOnly` + `-TestHome` 隔离安装
+  → 断言产物/插件注册/版本 → GitHub Release 上传 zip 与 SHA256。
+
 ## 1.2.1
 
 适配 Codex 桌面版 **26.1120.5083.0**（2026-11-24 自动更新）——新构建把标签页改成了 SPA + 启动页卡片，
