@@ -14,6 +14,9 @@
   （`v1.2.2`，安装包与 1.2.1 功能一致）。
 - 发布包首次走完整自动链路：构建 → 干净 runner 上 `-CheckOnly` + `-TestHome` 隔离安装
   → 断言产物/插件注册/版本 → GitHub Release 上传 zip 与 SHA256。
+- 安装器：快捷方式创建失败只告警、不中断安装（英文系统上中文 `.lnk` 可能失败；可用 `start-bar.cmd` 启动）。
+- Release 自检：`shell: pwsh` 里嵌套 Windows PowerShell 5.1 时显式修正 `PSModulePath`，
+  避免 `Get-FileHash` 等 cmdlet 找不到；自检失败时用 `::error::` annotation 暴露原因。
 
 ## 1.2.1
 
