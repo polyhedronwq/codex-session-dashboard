@@ -137,7 +137,7 @@ build.ps1      src → dist → 发布包（含逐文件 SHA-256 清单）
 ```powershell
 ./build.ps1                          # 构建并同步到本机运行位置
 ./build.ps1 -NoMirror                # 只出 dist
-./verify/run-all.ps1                 # 全量回归（63 项，约 5 分钟）
+./verify/run-all.ps1                 # 全量回归（67 项，约 5 分钟）
 ./verify/run-all.ps1 -Snapshot       # 额外保存截图与数值快照
 ./verify/run-all.ps1 -SkipBar        # 跳过依赖运行中 Codex 的检查
 ./verify/post-upgrade.ps1            # Codex 自动升级后的自检（约 40 秒）

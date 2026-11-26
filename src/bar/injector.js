@@ -69,6 +69,8 @@ const health = {
   lastOkAt: 0,
   thread: null,
   missingAnchors: [],
+  // 底栏布局警告（Codex 新容器导致底栏只能让位/没空间时非空）
+  layoutWarn: null,
   build: BUILD,
   writtenAt: 0,
 };
@@ -97,6 +99,7 @@ function setHealth(state, message, extra) {
       lastOkAt: health.lastOkAt ? new Date(health.lastOkAt).toISOString() : null,
       thread: health.thread,
       missingAnchors: health.missingAnchors,
+      layoutWarn: health.layoutWarn || null,
       build: health.build,
     }, null, 2));
   } catch (error) { /* 健康文件写不了也不能影响主循环 */ }
@@ -441,6 +444,7 @@ async function openDashboardTab(browser, page) {
   let lastBusy = false;
   let emptyStreak = 0;
   let lastChangeAt = Date.now();
+  let lastLayoutWarn = '';
   const stop = () => { stopped = true; };
   browser.on('disconnected', stop);
   page.on('close', stop);
@@ -448,6 +452,14 @@ async function openDashboardTab(browser, page) {
   while (!stopped) {
     try {
       const missing = await page.evaluate(PROBE_ANCHORS).catch(() => []);
+      // 底栏自己会让位；只有"让位后仍没空间"才带 warning，提醒布局变了。
+      const layoutWarn = await page.evaluate(() => (typeof window.__dshBarLayoutWarn === 'string' ? window.__dshBarLayoutWarn : ''))
+        .catch(() => '');
+      if (layoutWarn !== lastLayoutWarn) {
+        lastLayoutWarn = layoutWarn;
+        if (layoutWarn) log('layout warning:', layoutWarn, '(底栏空间不足，诊断见 health.json)');
+      }
+      health.layoutWarn = layoutWarn || null;
       const resolved = await resolveThreadInPage(page, lastThread).catch(() => ({ id: null, reason: 'unknown' }));
       // 冷启动预热：页面还没渲染出锚点时是"加载中"，不是故障。
       const warmingUp = missing.length > 0 && !pageReadySeen && Date.now() - pageStartedAt < START_GRACE_MS;

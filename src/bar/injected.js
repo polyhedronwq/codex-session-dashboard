@@ -347,45 +347,123 @@
 
 
 
-  // 缓存输入框元素：每帧重新 querySelectorAll 要 0.039ms，缓存后只要 0.0025ms
+  // 主输入框不一定是 DOM 里第一个编辑器：Codex 的交互提问卡片会自带一个 composer，
+  // 排在主输入框前面。取"最靠下的可见 composer"才是用户真正看到的输入区。
   let lastPushAt = Date.now();
   let staleHint = false;
-  let cachedEditor = null;
-  let cachedComposer = null;
   let lastPlacedKey = '';
   let lastSpace = '';
+  let lastLayout = null;
+  let lastLayoutWarn = '';
+
+  function composerCandidates() {
+    const list = [];
+    for (const el of document.querySelectorAll('[class*="ComposerLayoutRoot"]')) {
+      const r = el.getBoundingClientRect();
+      if (r.width >= 100 && r.height > 0 && r.bottom > 0 && r.top < window.innerHeight) list.push({ el, r });
+    }
+    return list;
+  }
 
   function resolveComposer() {
-    // Codex 切换会话/标签页时，旧编辑器仍然 connected 但被隐藏（宽高 0）。
-    // 只看 isConnected 会一直拿旧编辑器算位置，底栏就会"切到第二个会话后消失"。
-    if (cachedEditor && cachedEditor.isConnected && cachedEditor.getBoundingClientRect().width > 200) {
-      return { editor: cachedEditor, composer: cachedComposer };
+    const editors = [];
+    for (const el of document.querySelectorAll('.ProseMirror[contenteditable="true"]')) {
+      const r = el.getBoundingClientRect();
+      if (r.width > 200 && r.height > 0) editors.push(el);
     }
-    cachedEditor = editorEl();
-    cachedComposer = cachedEditor
-      ? (cachedEditor.closest('[class*="ComposerLayoutRoot"]') || cachedEditor.closest('form') || cachedEditor.parentElement)
-      : null;
-    return { editor: cachedEditor, composer: cachedComposer };
+    let best = null;
+    for (const candidate of composerCandidates()) {
+      if (!best || candidate.r.bottom > best.r.bottom) best = candidate;
+    }
+    if (best) {
+      return { editor: editors.find((el) => best.el.contains(el)) || editors[0] || null, composer: best.el, rect: best.r };
+    }
+    const editor = editors[0] || null;
+    if (!editor) return { editor: null, composer: null, rect: null };
+    const composer = editor.closest('form') || editor.parentElement;
+    return { editor, composer, rect: composer.getBoundingClientRect() };
+  }
+
+  // 底栏不能压在任何可见输入区/交互控件上。未来 Codex 再往输入区上方/下方插卡片时，
+  // 即使锚点选错，这里也按矩形让位；真没空间才 clamp，并写 __dshBarLayoutWarn。
+  function blockingFloor(root, left, width, top, height) {
+    const bandTop = top;
+    const bandBottom = top + height;
+    let floor = -Infinity;
+    const consider = (el, rect) => {
+      if (!rect || rect.width <= 0 || rect.height <= 0) return;
+      if (rect.right <= left || rect.left >= left + width) return;
+      if (rect.bottom <= bandTop || rect.top >= bandBottom) return;
+      floor = Math.max(floor, rect.bottom);
+    };
+    for (const el of document.querySelectorAll('[class*="ComposerLayoutRoot"], .ProseMirror[contenteditable="true"], textarea, form')) {
+      if (el.closest('#' + ID)) continue;
+      consider(el, el.getBoundingClientRect());
+    }
+    // 通用兜底：未来可能是不带 composer 类的卡片/按钮条，扫底栏覆盖区域内的可交互元素。
+    // 扫描时先把底栏设为 pointer-events:none，否则命中的永远是底栏自己，看不到下面的卡片。
+    const previousPointerEvents = root.style.pointerEvents;
+    root.style.pointerEvents = 'none';
+    try {
+      for (const fx of [0.08, 0.3, 0.5, 0.7, 0.92]) {
+        for (const fy of [top + 3, top + height - 3]) {
+          const el = document.elementFromPoint(left + width * fx, fy);
+          if (!el || el.closest('#' + ID)) continue;
+          const hit = el.closest('button, a[href], input, textarea, [contenteditable], [role="button"], [role="textbox"]');
+          if (!hit) continue;
+          consider(hit, hit.getBoundingClientRect());
+        }
+      }
+    } finally {
+      root.style.pointerEvents = previousPointerEvents;
+    }
+    return floor;
+  }
+
+  function layoutInfo() {
+    return lastLayout;
   }
 
   function place() {
     const root = document.getElementById(ID);
     if (!root) return;
-    const { editor, composer } = resolveComposer();
-    if (!editor) { root.style.display = 'none'; lastPlacedKey = ''; return; }
+    const resolved = resolveComposer();
+    if (!resolved.editor) { root.style.display = 'none'; lastPlacedKey = ''; return; }
     // 缓存/布局切换瞬间 composer 可能比 editor 先塌成 0；这时用 editor 的位置算。
-    const box = (composer && composer.getBoundingClientRect().width >= 100) ? composer : editor;
+    const box = (resolved.rect && resolved.rect.width >= 100) ? resolved.composer : resolved.editor;
     const r = box.getBoundingClientRect();
     if (!r || r.width < 100) { root.style.display = 'none'; lastPlacedKey = ''; return; }
     root.style.display = '';
 
     const height = root.getBoundingClientRect().height || 24;
+    const maxTop = window.innerHeight - height - 1;
     const room = window.innerHeight - r.bottom;
-    const top = r.bottom + Math.max((room - height) / 2, 0);
-    const topPx = Math.min(top, window.innerHeight - height - 1);
+    let topPx = Math.min(r.bottom + Math.max((room - height) / 2, 0), maxTop);
+    let adjusted = false;
+    let noRoom = false;
+    // 最多让 4 次，防止互相叠着的容器导致死循环
+    for (let i = 0; i < 4; i += 1) {
+      const floor = blockingFloor(root, r.left, Math.max(r.width, 200), topPx, height);
+      if (!(floor >= topPx)) break;
+      if (floor + 2 > maxTop) { noRoom = true; topPx = Math.max(maxTop, topPx); break; }
+      topPx = floor + 2;
+      adjusted = true;
+    }
+
+    const warn = noRoom ? 'no-room' : (adjusted ? 'adjusted' : '');
+    lastLayout = {
+      left: Math.round(r.left), width: Math.round(r.width), top: Math.round(topPx), height,
+      composerBottom: Math.round(r.bottom), adjusted, noRoom, warn,
+    };
+    if (warn !== lastLayoutWarn) {
+      lastLayoutWarn = warn;
+      window.__dshBarLayoutWarn = warn;
+      if (warn) root.setAttribute('data-layoutwarn', warn);
+      else root.removeAttribute('data-layoutwarn');
+    }
 
     // 位置/宽度/纵向位置都没变就不写样式——逐帧写会持续触发布局
-    const key = `${r.left}|${r.width}|${Math.round(topPx)}`;
+    const key = `${r.left}|${r.width}|${Math.round(topPx)}|${Math.round(height)}|${noRoom ? 1 : 0}`;
     if (key === lastPlacedKey) return;
     lastPlacedKey = key;
 
@@ -805,7 +883,8 @@
   placeFrame = requestAnimationFrame(followLoop);
   window.addEventListener('resize', place);
 
-  window.__dshBar = { render, place, ensure };
+  window.__dshBar = { render, place, ensure, layout: layoutInfo };
+  window.__dshBarLayoutWarn = '';
   window.__dshBarTeardown = () => {
     clearInterval(ensureTimer);
     if (placeFrame) cancelAnimationFrame(placeFrame);
@@ -830,7 +909,7 @@
 
     ['__dshBarInstalled', '__dshBar', '__dshBarBuild', '__dshBarSig', '__dshBarRender',
 
-     '__dshBarSetLayout', '__dshBarKick', '__dshOpenDashboard',
+     '__dshBarSetLayout', '__dshBarKick', '__dshOpenDashboard', '__dshBarLayoutWarn',
 
      '__dshTurnMap', '__dshTurns', '__dshUsage'].forEach((key) => {
 

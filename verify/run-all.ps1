@@ -532,6 +532,11 @@ Check '底栏跟随面板动画（偏差 < 2px）' {
   $LASTEXITCODE -eq 0
 }
 
+Check '底栏锚点：问题卡片/未知卡片不遮挡输入区' {
+  & $node (Join-Path $verify 'bar-anchor.js')
+  $LASTEXITCODE -eq 0
+}
+
 Check '运行中的判定结果与 health.json 一致' {
   # 现场一致性：页面里实际判定出来的会话，必须和注入器记录的一样
   & $node (Join-Path $verify 'resolver-live.js') $installed $node

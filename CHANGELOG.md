@@ -3,6 +3,22 @@
 本项目遵循语义化版本（`VERSION` 文件）。底栏内部另有一个构建号（`injected.js` 里的 `BUILD`），
 用于热更新排查，两者都会写进安装包的 `manifest.json`。
 
+## 1.2.3
+
+修 Codex「交互提问卡片」出现时底栏压住主输入框的 bug（1.2.1 适配遗留）。
+
+- 根因：提问卡片自带一个 composer/ProseMirror，且排在主输入框**前面**；
+  旧逻辑取"第一个编辑器"→ 锚到卡片上，底栏被画到主输入框那一行（卡片消失后缓存失效才回正）。
+- 修复：
+  - 锚点改为"最靠下的可见 composer"，编辑器也取该 composer 内的 ProseMirror，不再依赖 DOM 顺序；
+  - 新增重叠让位：底栏只要压住任何可见输入区/交互控件（含未知卡片/按钮条），自动下移到其下方（最多 4 次迭代）；
+  - 真没空间时 clamp 并写 `__dshBarLayoutWarn` / `health.json` 的 `layoutWarn`（`no-room`），日志同步提示；
+  - 新增诊断接口 `window.__dshBar.layout()`（top/composerBottom/adjusted/noRoom）。
+- 测试：新增 `verify/bar-anchor.js`（用系统 Edge/Chrome headless 加载真实 `injected.js`，不碰 Codex）：
+  启动即带问题卡片、运行中插入卡片、未知按钮条让位、没空间上报、清理恢复，共 6 条断言。
+  故障注入：旧 `injected.js` → 1/6 红（底栏 top=718 压在主输入框 600–800 上）；去掉重叠 guard → 4/6 红；恢复后 6/6 绿。
+- 套件 66 → **67 项**。
+
 ## 1.2.2
 
 发布流水线修复（安装包内容与 1.2.1 相同，无功能变化）。
