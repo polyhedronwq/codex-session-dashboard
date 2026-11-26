@@ -384,8 +384,39 @@
     return { editor, composer, rect: composer.getBoundingClientRect() };
   }
 
-  // 底栏不能压在任何可见输入区/交互控件上。未来 Codex 再往输入区上方/下方插卡片时，
-  // 即使锚点选错，这里也按矩形让位；真没空间才 clamp，并写 __dshBarLayoutWarn。
+  // 底栏是固定在输入区下方的覆盖层：正文从它下面滚过是正常现象，**不能**因此让位。
+  // 只有"输入区附近的浮层"（权限条、问题卡片、按钮条）才需要避开。
+  // 这区分必须在几何判断之前做，否则正文里的按钮会把底栏推来推去（实测 1005↔1015 震荡）。
+  function inScrollContainer(el) {
+    let node = el;
+    while (node && node !== document.body) {
+      const style = window.getComputedStyle(node);
+      if ((style.overflowY === 'auto' || style.overflowY === 'scroll')
+        && node.scrollHeight > node.clientHeight + 20) return true;
+      node = node.parentElement;
+    }
+    return false;
+  }
+
+  // 悬停才出现的按钮（message-action 等）虽然占着矩形，但用户看不见，不能当障碍物。
+  function isVisibleBlock(el) {
+    const rect = el.getBoundingClientRect();
+    if (rect.width <= 0 || rect.height <= 0) return false;
+    const style = window.getComputedStyle(el);
+    if (style.visibility === 'hidden' || style.display === 'none') return false;
+    if (style.pointerEvents === 'none') return false;
+    if (parseFloat(style.opacity || '1') < 0.05) return false;
+    return true;
+  }
+
+  function isBlocker(el) {
+    if (!el || (el.closest && el.closest('#' + ID))) return false;
+    if (el.closest && el.closest('#dsh-usage-pop')) return false;
+    if (inScrollContainer(el)) return false;
+    return isVisibleBlock(el);
+  }
+
+  // 返回"必须让到它下面"的最低底边；没有则 -Infinity。
   function blockingFloor(root, left, width, top, height) {
     const bandTop = top;
     const bandBottom = top + height;
@@ -397,7 +428,7 @@
       floor = Math.max(floor, rect.bottom);
     };
     for (const el of document.querySelectorAll('[class*="ComposerLayoutRoot"], .ProseMirror[contenteditable="true"], textarea, form')) {
-      if (el.closest('#' + ID)) continue;
+      if (!isBlocker(el)) continue;
       consider(el, el.getBoundingClientRect());
     }
     // 通用兜底：未来可能是不带 composer 类的卡片/按钮条，扫底栏覆盖区域内的可交互元素。
@@ -408,9 +439,9 @@
       for (const fx of [0.08, 0.3, 0.5, 0.7, 0.92]) {
         for (const fy of [top + 3, top + height - 3]) {
           const el = document.elementFromPoint(left + width * fx, fy);
-          if (!el || el.closest('#' + ID)) continue;
+          if (!el || (el.closest && el.closest('#' + ID))) continue;
           const hit = el.closest('button, a[href], input, textarea, [contenteditable], [role="button"], [role="textbox"]');
-          if (!hit) continue;
+          if (!hit || !isBlocker(hit)) continue;
           consider(hit, hit.getBoundingClientRect());
         }
       }
@@ -438,14 +469,20 @@
     const height = root.getBoundingClientRect().height || 24;
     const maxTop = window.innerHeight - height - 1;
     const room = window.innerHeight - r.bottom;
-    let topPx = Math.min(r.bottom + Math.max((room - height) / 2, 0), maxTop);
+    const baseTop = Math.min(r.bottom + Math.max((room - height) / 2, 0), maxTop);
+    let topPx = baseTop;
     let adjusted = false;
     let noRoom = false;
     // 最多让 4 次，防止互相叠着的容器导致死循环
     for (let i = 0; i < 4; i += 1) {
       const floor = blockingFloor(root, r.left, Math.max(r.width, 200), topPx, height);
       if (!(floor >= topPx)) break;
-      if (floor + 2 > maxTop) { noRoom = true; topPx = Math.max(maxTop, topPx); break; }
+      if (floor + 2 > maxTop) {
+        // 让不下去就留在基础位置：底栏是覆盖层，宁可轻微重叠，也不能来回跳
+        noRoom = true;
+        topPx = baseTop;
+        break;
+      }
       topPx = floor + 2;
       adjusted = true;
     }

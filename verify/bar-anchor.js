@@ -75,6 +75,7 @@ const frame2 = (page) => page.evaluate(() => new Promise((r) => requestAnimation
       warn: window.__dshBarLayoutWarn,
       fakeQcard: rect(document.getElementById('fake-qcard')),
       strip: rect(document.getElementById('fake-strip')),
+      transcriptBtn: rect(document.getElementById('fake-transcript-btn')),
     };
   });
   const place = async () => { await page.evaluate(() => window.__dshBar && window.__dshBar.place && window.__dshBar.place()); await frame2(page); };
@@ -137,6 +138,93 @@ const frame2 = (page) => page.evaluate(() => new Promise((r) => requestAnimation
       && Math.abs(s.layout.width - Math.round(s.main.width)) <= 2,
       JSON.stringify(s));
 
+    // ---- 正文滚动：滚动容器内的按钮穿过底栏带，底栏必须纹丝不动 ----
+    // 真实事故：展开大量步骤后滚动，正文里的 message-action 按钮穿过底栏带，
+    // 旧 guard 把它当障碍物 → 让位到 maxTop，下一帧命中消失又弹回 → 1005↔1015 震荡。
+    const makeTranscript = () => page.evaluate(() => {
+      // 真实的 Codex 里正文滚到底、输入框浮在上面；这里让假正文一直铺到窗口底部，
+      // 底栏所在行（composer 下方）就落在正文区域里 —— 正是"正文按钮穿过底栏带"的场景。
+      const main = document.getElementById('main-composer').getBoundingClientRect();
+      const holder = document.createElement('div');
+      holder.id = 'fake-transcript';
+      holder.style.cssText = `position:fixed;left:${main.left}px;top:90px;width:${main.width}px;height:${window.innerHeight - 90}px;overflow-y:auto;z-index:1`;
+      const inner = document.createElement('div');
+      inner.style.cssText = 'position:relative;height:3000px';
+      // 放在偏下位置：滚动时它会上移并穿过底栏所在行
+      const btn = document.createElement('button');
+      btn.id = 'fake-transcript-btn';
+      btn.textContent = '复制';
+      btn.style.cssText = `position:absolute;left:200px;top:1300px;width:28px;height:28px`;
+      inner.appendChild(btn);
+      holder.appendChild(inner);
+      document.body.insertBefore(holder, document.body.firstChild);
+      return true;
+    });
+    const scrollTranscript = (top) => page.evaluate((st) => {
+      const holder = document.getElementById('fake-transcript');
+      const btn = document.getElementById('fake-transcript-btn');
+      if (!holder || !btn) return null;
+      holder.scrollTop = st;
+      const hr = holder.getBoundingClientRect();
+      const br = btn.getBoundingClientRect();
+      return { scrollTop: holder.scrollTop, btnTop: Math.round(br.top), btnBottom: Math.round(br.bottom), holderTop: Math.round(hr.top), holderBottom: Math.round(hr.bottom) };
+    }, top);
+
+    await makeTranscript();
+    await frame2(page);
+    await place();
+    const baseBefore = await snap();
+    const seenTops = [];
+    const seenWarn = [];
+    let crossedBand = false;
+    // 让按钮一路滚过底栏所在行，逐帧采样（模拟真实滚动）
+    for (let st = 400; st <= 620; st += 20) {
+      const stInfo = await scrollTranscript(st);
+      await frame2(page);
+      await place();
+      const cur = await snap();
+      seenTops.push(cur.bar ? cur.bar.top : -1);
+      seenWarn.push(cur.warn);
+      if (stInfo && cur.bar) {
+        const bandTop = cur.bar.top;
+        const bandBottom = cur.bar.top + cur.bar.height;
+        // 按钮矩形与底栏带相交 → 说明确实"穿过"了底栏
+        if (stInfo.btnTop < bandBottom && stInfo.btnBottom > bandTop) crossedBand = true;
+      }
+    }
+    const uniqueTops = [...new Set(seenTops.map((v) => Math.round(v)))];
+    record('正文滚动：底栏位置全程不变（不被正文按钮推走）',
+      crossedBand && uniqueTops.length === 1 && uniqueTops[0] === (baseBefore.bar && baseBefore.bar.top),
+      JSON.stringify({ uniqueTops, crossedBand, baseTop: baseBefore.bar && baseBefore.bar.top }));
+
+    record('正文滚动：不产生 no-room 警告',
+      seenWarn.every((w) => w === ''),
+      JSON.stringify({ warns: [...new Set(seenWarn)] }));
+
+    // 不可见（悬停才出现）的按钮也不能当障碍物
+    await page.evaluate(() => {
+      const main = document.getElementById('main-composer').getBoundingClientRect();
+      const ghost = document.createElement('button');
+      ghost.id = 'fake-ghost';
+      ghost.style.cssText = `position:fixed;left:${main.left + 40}px;top:${main.bottom + 30}px;width:28px;height:28px;opacity:0`;
+      ghost.textContent = 'x';
+      document.body.appendChild(ghost);
+    });
+    await frame2(page);
+    await place();
+    s = await snap();
+    const ghostIgnored = s.warn === '' && s.layout && s.layout.adjusted === false && uniqueTops[0] === s.bar.top;
+    record('不可见按钮不算障碍物', ghostIgnored, JSON.stringify({ layout: s.layout, warn: s.warn }));
+
+    await page.evaluate(() => {
+      ['fake-transcript', 'fake-ghost'].forEach((id) => {
+        const el = document.getElementById(id);
+        if (el) el.remove();
+      });
+    });
+    await frame2(page);
+    await place();
+
     // ---- 运行中再插入问题卡片：位置不能被卡片带跑 ----
     await addQcard();
     await frame2(page);
@@ -179,9 +267,13 @@ const frame2 = (page) => page.evaluate(() => new Promise((r) => requestAnimation
     await frame2(page);
     await place();
     s = await snap();
-    record('没空间：clamp 并写 layoutWarn/noRoom',
-      s.layout && s.layout.noRoom === true && s.layout.warn === 'no-room' && s.warn === 'no-room',
-      JSON.stringify(s));
+    // 1.2.4 起：让不下去时**留在基础位置**（不 clamp 到 maxTop），避免"让位→命中消失→弹回"的震荡。
+    // 基础位置 = composerBottom + 剩余空间居中；maxTop = innerHeight - height - 1。
+    const baseTop = s.main ? Math.round(s.main.bottom + Math.max((VIEW.height - s.main.bottom - (s.bar ? s.bar.height : 24)) / 2, 0)) : null;
+    record('没空间：上报 noRoom 且不跳位（留在基础位置）',
+      s.layout && s.layout.noRoom === true && s.layout.warn === 'no-room' && s.warn === 'no-room'
+      && s.bar && baseTop !== null && s.bar.top === baseTop && s.bar.top < (VIEW.height - (s.bar.height || 24) - 1),
+      JSON.stringify({ baseTop, maxTop: VIEW.height - (s.bar ? s.bar.height : 24) - 1, snap: s }));
 
     await cleanup();
     await frame2(page);
